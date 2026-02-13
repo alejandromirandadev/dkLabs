@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "name": "Default Pieces",
+  "scale": {
+    "radiusRelativeToNode": 1.2
+  },
+  "styles": {
+    "strokeWidth": 2
+  },
+  "types": {
+    "white": {
+      "count": 21,
+      "fillColor": "#f2f2f2",
+      "strokeColor": "#1a1a1a"
+    },
+    "black": {
+      "count": 21,
+      "fillColor": "#1a1a1a",
+      "strokeColor": "#f2f2f2"
+    }
+  }
+}

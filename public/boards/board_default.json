@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "name": "Hex Board",
+  "layout": {
+    "orientation": "flat-top",
+    "origin": { "x": 640, "y": 360 }
+  },
+  "hex": {
+    "sideLength": 50,
+    "strokeWidth": 2,
+    "fillColor": "#1b1b1b",
+    "strokeColor": "#ffffff"
+  },
+  "nodes": {
+    "radius": 7,
+    "margin": 5,
+    "fillColor": "#ffffff",
+    "strokeColor": "#000000",
+    "hoverColor": "#ffd54a"
+  },
+  "generate": {
+    "type": "hex",
+    "radius": 3
+  }
+}
