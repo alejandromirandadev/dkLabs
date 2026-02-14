@@ -169,7 +169,43 @@ export default class ThreeBoardMode {
 
     // Scene
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x0b1020); //Aquí cambia el color del fondo 3d
+    //this.scene.background = new THREE.Color(0x0b1020); //Aquí cambia el color del fondo 3d
+
+      new THREE.TextureLoader().load(
+    "assets/images/background2.png",
+    (tex) => {
+      // sRGB según versión de Three
+      if ("colorSpace" in tex) tex.colorSpace = THREE.SRGBColorSpace;
+      else tex.encoding = THREE.sRGBEncoding;
+
+      this.scene.background = tex;
+      console.log("[ThreeBoardMode] Background loaded:", "assets/images/background2.png");
+    },
+    undefined,
+    (err) => {
+      console.error("[ThreeBoardMode] Background FAILED to load:", "assets/images/background2.png", err);
+    }
+  );
+
+    // Fondo 3D con imagen fija (diagnóstico + ruta robusta con Vite BASE_URL)
+    const base = (import.meta?.env?.BASE_URL ?? '/');
+    const bgUrl = `${base.endsWith('/') ? base : base + '/'}assets/images/background2.png`;
+
+    new THREE.TextureLoader().load(
+      bgUrl,
+      (bgTexture) => {
+        // Ajuste sRGB (según versión de Three)
+        if ("colorSpace" in bgTexture) bgTexture.colorSpace = THREE.SRGBColorSpace;
+        else bgTexture.encoding = THREE.sRGBEncoding;
+
+        this.scene.background = bgTexture;
+        console.log('[ThreeBoardMode] Background loaded:', bgUrl);
+      },
+      undefined,
+      (err) => {
+        console.error('[ThreeBoardMode] Background FAILED to load:', bgUrl, err);
+      }
+    );
 
     // Camera (fija tipo tablero)
     const { width, height } = this._getSize();
@@ -186,10 +222,19 @@ export default class ThreeBoardMode {
     this.scene.add(dir);
 
     // Renderer
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    this.renderer.setClearAlpha(0);
+    this.renderer.setClearColor(0x000000, 0); // <-- fuerza alpha 0 en el clear
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(width, height);
     this.container.appendChild(this.renderer.domElement);
+    this.renderer.domElement.style.background = "transparent"; // <-- fuerza CSS del canvas
+
+    // Fondo fijo vía CSS usando la misma URL validada (bgUrl)
+    this.container.style.backgroundImage = `url('${bgUrl}')`;
+    this.container.style.backgroundSize = "cover";
+    this.container.style.backgroundPosition = "center";
+    this.container.style.backgroundRepeat = "no-repeat";
 
     // Interaction setup
     this.raycaster = new THREE.Raycaster();

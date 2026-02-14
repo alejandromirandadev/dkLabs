@@ -12,9 +12,22 @@ export default class BoardScene extends Phaser.Scene {
     this.backColor = "#0b1020"; //Aquí cambia color del fondo 2d
   }
 
+  preload() {
+    this.load.image("boardBg1", "assets/images/background1.png");
+  }
+
   async create() {
     this.cameras.main.setBackgroundColor(this.backColor); // azul oscuro elegante
 
+    // Fondo fijo (no se mueve con la cámara)
+    this.boardBg1 = this.add.image(0, 0, "boardBg1")
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(-9999);
+
+    // Ajustar para cubrir el canvas
+    this.boardBg1.displayWidth = this.scale.width;
+    this.boardBg1.displayHeight = this.scale.height;
     // 1) Board
     const boardCfg = await fetch("/boards/board_default.json").then((r) => r.json());
     this.board = new Board(this, boardCfg);
@@ -114,7 +127,7 @@ export default class BoardScene extends Phaser.Scene {
     });
 
 
-this.input.on("drag", (pointer, gameObject, dragX, dragY) => {
+    this.input.on("drag", (pointer, gameObject, dragX, dragY) => {
       // mueve el objeto que se está arrastrando
       gameObject.setPosition(dragX, dragY);
     });
@@ -220,6 +233,14 @@ this.input.on("drag", (pointer, gameObject, dragX, dragY) => {
       this.poolLeft.refreshActivePiece();
       this.poolRight.refreshActivePiece();
     }
+
+    // Reajustar fondo si cambia el tamaño del canvas
+    this.scale.on("resize", (gameSize) => {
+      const { width, height } = gameSize;
+
+      this.boardBg1.displayWidth = width;
+      this.boardBg1.displayHeight = height;
+    });
   }
 
   #returnToPool(piece) {
