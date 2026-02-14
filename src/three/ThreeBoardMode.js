@@ -650,7 +650,13 @@ export default class ThreeBoardMode {
             tex.needsUpdate = true;
 
             // Material unlit => colores casi iguales al PNG
-            const topMat = new THREE.MeshBasicMaterial({ map: tex });
+            // Polygon offset para evitar “rayado” por z-fighting/precision en depth
+            const topMat = new THREE.MeshBasicMaterial({
+              map: tex,
+              polygonOffset: true,
+              polygonOffsetFactor: -2,
+              polygonOffsetUnits: -2,
+            });
 
             const topMesh = new THREE.Mesh(topGeo, topMat);
             topMesh.castShadow = false;
