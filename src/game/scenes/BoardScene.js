@@ -3,6 +3,7 @@ import Board from "../board/Board";
 import PieceFactory from "../pieces/PieceFactory";
 import PiecePool from "../pieces/PiecePool";
 import { findNearestFreeNode } from "../board/FindSnapNode"; // <-- OJO: ajusta el nombre EXACTO del archivo si el tuyo difiere
+import { placementState } from "../../state/PlacementState";
 
 export default class BoardScene extends Phaser.Scene {
   constructor() {
@@ -73,6 +74,24 @@ export default class BoardScene extends Phaser.Scene {
 
     this.input.on("dragstart", (pointer, gameObject) => {
       gameObject.setDepth(999);
+
+      // Si la pieza ya estaba colocada, libera su Hueco previo para evitar "ocupados fantasma"
+      const prevKey = gameObject.getData("nodeKey");
+      if (typeof prevKey === "string") {
+        const prevNode = this.placeNodes.find((n) => {
+          if (!n?.getData) return false;
+          const k = `${n.getData("cellId")}:${n.getData("type")}:${n.getData("sideIndex")}`;
+          return k === prevKey;
+        });
+
+        if (prevNode) {
+          prevNode.setData("occupied", false);
+          prevNode.setData("pieceId", null);
+        }
+
+        gameObject.setData("placed", false);
+        gameObject.setData("nodeKey", null);
+      }
     });
 
     this.input.on("drag", (pointer, gameObject, dragX, dragY) => {
@@ -94,6 +113,7 @@ export default class BoardScene extends Phaser.Scene {
       if (!target) {
         this.#returnToPool(piece);
         gameObject.setDepth(10);
+        placementState.captureFromPhaser(this);
         return;
       }
 
@@ -111,7 +131,12 @@ export default class BoardScene extends Phaser.Scene {
         "nodeKey",
         `${target.getData("cellId")}:${target.getData("type")}:${target.getData("sideIndex")}`
       );
+
+      placementState.captureFromPhaser(this);
     });
+
+    // Restaurar placements previos (persistidos) en 2D
+    placementState.applyToPhaser(this);
   }
 
   #returnToPool(piece) {
