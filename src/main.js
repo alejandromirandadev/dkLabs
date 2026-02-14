@@ -2,9 +2,13 @@ import './style.css'
 import { createGame } from './game/createGame'
 import ThreeBoardMode from './three/ThreeBoardMode'
 import { placementState } from './state/PlacementState'
+import { pieceCountState } from './state/PieceCountState'
 
 // Carga placements persistidos (si hay)
 placementState.loadFromStorage()
+
+// Carga contadores persistidos (si hay)
+pieceCountState.loadFromStorage()
 
 const game = createGame('app')
 
@@ -88,6 +92,17 @@ function back2D() {
     // (micro-delay para que Phaser ya esté resumiendo)
     setTimeout(() => {
       placementState.applyToPhaser(boardScene)
+
+      // Refresca contadores del pool (por si se colocó/quitó en 3D)
+      const counts = pieceCountState.getCounts()
+      try {
+        boardScene.poolLeft?.setRemaining?.(counts.whiteRemaining)
+        boardScene.poolRight?.setRemaining?.(counts.blackRemaining)
+        boardScene.poolLeft?.refreshActivePiece?.()
+        boardScene.poolRight?.refreshActivePiece?.()
+      } catch {
+        // ignore
+      }
     }, 0)
   }
 
@@ -101,6 +116,9 @@ btnBack2D?.addEventListener('click', back2D)
 btnClearBoard?.addEventListener('click', () => {
   // Limpia estado compartido (persistencia)
   placementState.clear()
+
+  // Reinicia contadores del pool (persistencia)
+  pieceCountState.reset()
 
   // Si estamos en 3D, limpia también visualmente el 3D
   if (threeMode?.isMounted) {

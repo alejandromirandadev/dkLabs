@@ -38,7 +38,22 @@ export default class PiecePool {
     });
     this.label.setDepth(3);
 
+    // Counter (piezas restantes en el pool)
+    this.remaining = 21;
+    this.counterText = scene.add.text(this.x + this.width - 12, this.y + 10, String(this.remaining), {
+      fontFamily: "Arial",
+      fontSize: "16px",
+      color: "#ffffff"
+    });
+    this.counterText.setOrigin(1, 0);
+    this.counterText.setDepth(3);
+
     this.pieces = [];
+  }
+
+  setRemaining(count) {
+    this.remaining = Math.max(0, Math.floor(Number(count) || 0));
+    if (this.counterText) this.counterText.setText(String(this.remaining));
   }
 
   addPieces(pieces) {
@@ -71,6 +86,50 @@ export default class PiecePool {
       p.circle.setData("homeX", px);
       p.circle.setData("homeY", py);
     });
+  }
+
+
+  /**
+   * Acomoda todas las piezas del pool en un solo punto (modo "stamp"):
+   * solo 1 pieza se verá/arrastrará a la vez.
+   */
+  layoutStack({ padding = 12, topOffset = 72 } = {}) {
+    const px = this.x + this.width / 2;
+    const py = this.y + topOffset;
+
+    this.pieces.forEach((p) => {
+      p.setPosition(px, py);
+      p.circle.setData("homeX", px);
+      p.circle.setData("homeY", py);
+    });
+  }
+
+  /**
+   * Muestra/activa SOLO 1 pieza disponible en el pool si remaining > 0.
+   * Si remaining == 0, deshabilita el drag desde el pool.
+   */
+  refreshActivePiece() {
+    // piezas que están físicamente en el pool (no colocadas)
+    const available = this.pieces.filter((p) => !p?.circle?.getData("placed"));
+
+    // Oculta/desactiva todas por default
+    for (const p of available) {
+      const g = p.circle;
+      if (!g) continue;
+      g.setVisible(false);
+      g.disableInteractive();
+      this.scene.input.setDraggable(g, false);
+    }
+
+    if (this.remaining <= 0) return;
+
+    // Activa la primera disponible
+    const active = available[0];
+    if (!active?.circle) return;
+
+    active.circle.setVisible(true);
+    active.circle.setInteractive();
+    this.scene.input.setDraggable(active.circle, true);
   }
 
   returnPieceToHome(piece) {

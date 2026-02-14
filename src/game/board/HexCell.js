@@ -36,7 +36,8 @@ export default class HexCell {
 
     // Colores por defecto (los puedes cambiar luego)
     this.colors = {
-      hexFill: 0x1b1b1b,
+      //hexFill: 0x1b1b1b,
+      hexFill: 0x223344, //Aquí cambia color de la celda en 2d
       hexStroke: 0xffffff,
       nodeFill: 0xffffff,
       nodeStroke: 0x000000,

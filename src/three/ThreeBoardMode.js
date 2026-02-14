@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { pieceCountState } from '../state/PieceCountState';
 
 /**
  * ThreeBoardMode
@@ -48,6 +49,9 @@ export default class ThreeBoardMode {
      */
     this.boardCfg = null;
 
+    /** @type {{ minX:number, maxX:number, minZ:number, maxZ:number } | null} */
+    this.boardBoundsXZ = null;
+
     // Interaction
     /** @type {THREE.Raycaster | null} */
     this.raycaster = null;
@@ -66,6 +70,7 @@ export default class ThreeBoardMode {
     this._onPointerDown = this._onPointerDown.bind(this);
     this._onPointerMove = this._onPointerMove.bind(this);
     this._onPointerUp = this._onPointerUp.bind(this);
+    this._onDoubleClick = this._onDoubleClick.bind(this);
 
     /**
      * Huecos (slots) generados por el tablero 3D.
@@ -76,6 +81,13 @@ export default class ThreeBoardMode {
 
     /** @type {AbortController | null} */
     this._abort = null;
+
+    /**
+     * Contadores 3D (sprites) para remaining por color.
+     * @type {{ white: { sprite: THREE.Sprite, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, texture: THREE.CanvasTexture } | null,
+     *         black: { sprite: THREE.Sprite, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, texture: THREE.CanvasTexture } | null } | null}
+     */
+    this.counter3D = null;
   }
 
   get isMounted() {
@@ -126,11 +138,15 @@ export default class ThreeBoardMode {
       const hole = holeById.get(holeId);
       if (!hole) continue;
       if (hole.occupied) continue;
-
-      piece.mesh.position.set(hole.position.x, 0, hole.position.z);
+      
+      const pegH = this.boardCfg.hexHeight * 0.85; //Aquí checar
+      piece.mesh.position.set(hole.position.x, hole.position.y - pegH, hole.position.z);
       hole.occupied = true;
       piece.holeId = hole.id;
     }
+
+    // Asegura que el pool respete el contador (solo 1 pieza visible si hay remaining)
+    this._syncPoolsFromCounts();
   }
 
   setInitialPlacements(placements) {
@@ -153,7 +169,7 @@ export default class ThreeBoardMode {
 
     // Scene
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x0f0f10);
+    this.scene.background = new THREE.Color(0x0b1020); //Aquí cambia el color del fondo 3d
 
     // Camera (fija tipo tablero)
     const { width, height } = this._getSize();
@@ -180,13 +196,14 @@ export default class ThreeBoardMode {
     this.pointerNdc = new THREE.Vector2();
     this.renderer.domElement.style.touchAction = 'none';
     this.renderer.domElement.addEventListener('pointerdown', this._onPointerDown);
+    this.renderer.domElement.addEventListener('dblclick', this._onDoubleClick);
     window.addEventListener('pointermove', this._onPointerMove);
     window.addEventListener('pointerup', this._onPointerUp);
 
     // Piso “sutil” para referencia
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(4000, 4000),
-      new THREE.MeshStandardMaterial({ color: 0x0b0b0c, roughness: 1.0, metalness: 0.0 })
+      new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 1.0, metalness: 0.0 }) //Aquí cambia el color de la Hex
     );
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = -0.02;
@@ -237,6 +254,7 @@ export default class ThreeBoardMode {
     // Remove renderer canvas
     if (this.renderer) {
       this.renderer.domElement?.removeEventListener?.('pointerdown', this._onPointerDown);
+      this.renderer.domElement?.removeEventListener?.('dblclick', this._onDoubleClick);
       this.renderer.dispose();
       const canvas = this.renderer.domElement;
       if (canvas && canvas.parentElement) canvas.parentElement.removeChild(canvas);
@@ -265,6 +283,19 @@ export default class ThreeBoardMode {
       } catch (_) {}
     }
     this.snapPreview = null;
+
+    // Contadores 3D
+    if (this.counter3D) {
+      for (const k of ['white', 'black']) {
+        const obj = this.counter3D[k];
+        if (!obj) continue;
+        try {
+          obj.texture?.dispose?.();
+          obj.sprite?.material?.dispose?.();
+        } catch (_) {}
+      }
+    }
+    this.counter3D = null;
   }
 
   // =====================
@@ -422,6 +453,15 @@ export default class ThreeBoardMode {
 
     // Re-encuadrar cámara fijo tipo mesa
     this._frameCameraToObject(group);
+
+    // Bounds en XZ (para determinar si soltó “fuera del tablero”)
+    const bb = new THREE.Box3().setFromObject(group);
+    this.boardBoundsXZ = {
+      minX: bb.min.x,
+      maxX: bb.max.x,
+      minZ: bb.min.z,
+      maxZ: bb.max.z,
+    };
   }
 
   // =====================
@@ -485,9 +525,12 @@ export default class ThreeBoardMode {
       return { obj: g, totalH, headH, pegH };
     };
 
+    // Cantidad total de piezas físicas disponibles por color.
+    // Mantener 21 en escena nos permite persistir por pieceId y operar modo “stamp”
+    // (solo 1 visible en pool según remaining).
     const counts = {
-      white: piecesCfg?.types?.white?.count ?? 21,
-      black: piecesCfg?.types?.black?.count ?? 21,
+      white: 21,
+      black: 21,
     };
 
     // Posiciones “pool” a los lados del tablero
@@ -496,35 +539,32 @@ export default class ThreeBoardMode {
     const leftX = boardBox.min.x - Math.max(80, size.x * 0.15);
     const rightX = boardBox.max.x + Math.max(80, size.x * 0.15);
     const baseY = 0;
-    const poolZStart = boardBox.min.z;
-    const poolZEnd = boardBox.max.z;
-    const lanes = 7;
-    const dz = (poolZEnd - poolZStart) / Math.max(1, lanes - 1);
+    // Pool “stack” (todas las piezas comparten el mismo home por color)
+    const poolZMid = (boardBox.min.z + boardBox.max.z) / 2;
 
-    let idxW = 0;
+    // Contadores 3D (sprites) cerca de cada pool
+    this._ensure3DCounters({ leftX, rightX, z: poolZMid, boardSize: size });
+
     for (let i = 0; i < counts.white; i++) {
       const { obj } = makePiece('white', whiteMat);
-      const z = poolZStart + (idxW % lanes) * dz;
       const x = leftX;
       const y = baseY;
+      const z = poolZMid;
       obj.position.set(x, y, z);
       group.add(obj);
       const id = `white_${i + 1}`;
       this.pieces.push({ id, type: 'white', mesh: obj, home: new THREE.Vector3(x, y, z), holeId: null });
-      idxW++;
     }
 
-    let idxB = 0;
     for (let i = 0; i < counts.black; i++) {
       const { obj } = makePiece('black', blackMat);
-      const z = poolZStart + (idxB % lanes) * dz;
       const x = rightX;
       const y = baseY;
+      const z = poolZMid;
       obj.position.set(x, y, z);
       group.add(obj);
       const id = `black_${i + 1}`;
       this.pieces.push({ id, type: 'black', mesh: obj, home: new THREE.Vector3(x, y, z), holeId: null });
-      idxB++;
     }
 
     this.piecesGroup = group;
@@ -532,6 +572,161 @@ export default class ThreeBoardMode {
 
     // Aplica placements existentes (venidos del 2D/localStorage)
     this._applyPlacementsToScene(this.initialPlacements);
+
+    // Pool modo “stamp” (solo 1 visible por color)
+    this._syncPoolsFromCounts();
+  }
+
+  _syncPoolsFromCounts() {
+    // Si aún no se han creado piezas, nada.
+    if (!this.pieces?.length) return;
+
+    const counts = pieceCountState.getCounts();
+    const remainingByType = {
+      white: Math.max(0, Math.floor(Number(counts.whiteRemaining) || 0)),
+      black: Math.max(0, Math.floor(Number(counts.blackRemaining) || 0)),
+    };
+
+    /** @param {'white'|'black'} type */
+    const syncOne = (type) => {
+      const remaining = remainingByType[type];
+      const poolPieces = this.pieces.filter((p) => p.type === type && !p.holeId);
+
+      // Oculta todas las piezas que estén en pool
+      for (const p of poolPieces) {
+        p.mesh.visible = false;
+        // Asegura que sigan “apiladas” en home
+        p.mesh.position.copy(p.home);
+      }
+
+      // Si hay piezas restantes, muestra solo 1 (la primera disponible)
+      if (remaining > 0 && poolPieces.length) {
+        poolPieces[0].mesh.visible = true;
+      }
+    };
+
+    syncOne('white');
+    syncOne('black');
+
+    // Actualiza texto del contador 3D
+    this._update3DCounters(remainingByType);
+  }
+
+  _ensure3DCounters({ leftX, rightX, z, boardSize }) {
+    if (!this.scene) return;
+    if (this.counter3D) {
+      // Asegura posición si el tablero cambió de tamaño
+      try {
+        const y = 55;
+        this.counter3D.white?.sprite?.position?.set(leftX, y, z);
+        this.counter3D.black?.sprite?.position?.set(rightX, y, z);
+      } catch (_) {}
+      return;
+    }
+
+    const make = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 128;
+      const ctx = canvas.getContext('2d');
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      const mat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+      const sprite = new THREE.Sprite(mat);
+      sprite.renderOrder = 1000;
+      return { sprite, canvas, ctx, texture };
+    };
+
+    this.counter3D = {
+      white: make(),
+      black: make(),
+    };
+
+    // Posición y escala
+    const y = 55;
+    this.counter3D.white.sprite.position.set(leftX, y, z);
+    this.counter3D.black.sprite.position.set(rightX, y, z);
+
+    const sx = Math.max(50, (boardSize?.x || 300) * 0.14);
+    const sy = Math.max(22, (boardSize?.x || 300) * 0.06);
+    this.counter3D.white.sprite.scale.set(sx, sy, 1);
+    this.counter3D.black.sprite.scale.set(sx, sy, 1);
+
+    this.scene.add(this.counter3D.white.sprite);
+    this.scene.add(this.counter3D.black.sprite);
+
+    // Primer render
+    const counts = pieceCountState.getCounts();
+    this._update3DCounters({
+      white: Math.max(0, Math.floor(Number(counts.whiteRemaining) || 0)),
+      black: Math.max(0, Math.floor(Number(counts.blackRemaining) || 0)),
+    });
+  }
+
+  _drawCounter({ ctx, canvas, title, value, isDark }) {
+    if (!ctx) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    // Fondo semitransparente
+    ctx.fillStyle = isDark ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.18)';
+    const r = 18;
+    ctx.beginPath();
+    ctx.moveTo(r, 0);
+    ctx.arcTo(w, 0, w, h, r);
+    ctx.arcTo(w, h, 0, h, r);
+    ctx.arcTo(0, h, 0, 0, r);
+    ctx.arcTo(0, 0, w, 0, r);
+    ctx.closePath();
+    ctx.fill();
+
+    // Borde
+    ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Texto
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.font = 'bold 28px Arial';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(title, 18, h / 2);
+
+    ctx.font = 'bold 44px Arial';
+    const txt = String(value);
+    const tw = ctx.measureText(txt).width;
+    ctx.fillText(txt, w - 18 - tw, h / 2);
+  }
+
+  _update3DCounters(remainingByType) {
+    if (!this.counter3D) return;
+    try {
+      const w = remainingByType?.white;
+      const b = remainingByType?.black;
+      if (this.counter3D.white) {
+        this._drawCounter({ ctx: this.counter3D.white.ctx, canvas: this.counter3D.white.canvas, title: 'BLANCAS', value: w, isDark: false });
+        this.counter3D.white.texture.needsUpdate = true;
+      }
+      if (this.counter3D.black) {
+        this._drawCounter({ ctx: this.counter3D.black.ctx, canvas: this.counter3D.black.canvas, title: 'NEGRAS', value: b, isDark: true });
+        this.counter3D.black.texture.needsUpdate = true;
+      }
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  _isInsideBoardXZ(x, z) {
+    if (!this.boardBoundsXZ || !this.boardCfg) return false;
+    // Margen para que “cerca del borde” aún se considere dentro.
+    const pad = (this.boardCfg.nodeRadius ?? 7) * 2.5;
+    return (
+      x >= this.boardBoundsXZ.minX - pad &&
+      x <= this.boardBoundsXZ.maxX + pad &&
+      z >= this.boardBoundsXZ.minZ - pad &&
+      z <= this.boardBoundsXZ.maxZ + pad
+    );
   }
 
   // =====================
@@ -646,6 +841,14 @@ export default class ThreeBoardMode {
     const piece = this._findPieceByObject(hits[0].object);
     if (!piece) return;
 
+    // No permitir agarrar piezas del pool si ya no hay remaining.
+    // (Solo se permite mover piezas ya colocadas)
+    if (!piece.holeId) {
+      const counts = pieceCountState.getCounts();
+      const remaining = piece.type === 'white' ? Number(counts.whiteRemaining) : Number(counts.blackRemaining);
+      if (!Number.isFinite(remaining) || remaining <= 0) return;
+    }
+
     // Si estaba ocupando un hueco, liberarlo (lo re-ocupamos al soltar si no hace snap a otro)
     const prevHoleId = piece.holeId;
     if (prevHoleId) {
@@ -663,6 +866,45 @@ export default class ThreeBoardMode {
 
     // Preview inmediato
     this._updateSnapPreview(piece);
+    ev.preventDefault?.();
+  }
+
+  _onDoubleClick(ev) {
+    if (!this.scene || !this.camera || !this.raycaster) return;
+    if (!this.piecesGroup) return;
+    if (this.dragState) return; // evita conflictos durante drag
+
+    const ndc = this._eventToNdc(ev);
+    if (!ndc) return;
+
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const hits = this.raycaster.intersectObjects(this.piecesGroup.children, true);
+    if (!hits.length) return;
+
+    const piece = this._findPieceByObject(hits[0].object);
+    if (!piece) return;
+
+    // Solo aplica a piezas colocadas en el tablero
+    if (!piece.holeId) return;
+
+    // Libera hueco
+    const hole = this.holes.find((h) => h.id === piece.holeId);
+    if (hole) hole.occupied = false;
+
+    piece.holeId = null;
+    piece.mesh.position.copy(piece.home);
+
+    // Devuelve al pool (contador +1) y persiste
+    const counts = pieceCountState.getCounts();
+    if (piece.type === 'white') {
+      pieceCountState.setCounts({ whiteRemaining: Math.min(21, (counts.whiteRemaining ?? 0) + 1) });
+    } else {
+      pieceCountState.setCounts({ blackRemaining: Math.min(21, (counts.blackRemaining ?? 0) + 1) });
+    }
+
+    // Re-sincroniza pool y contadores
+    this._syncPoolsFromCounts();
+
     ev.preventDefault?.();
   }
 
@@ -695,21 +937,55 @@ export default class ThreeBoardMode {
       return;
     }
 
+    const prevHoleId = this.dragState.prevHoleId;
+    const cameFromPlaced = !!prevHoleId;
     const snapped = this._trySnapPiece(piece);
-    if (!snapped) {
-      // Si venía de un Hueco, regresa a ese hueco (no pierde estado). Si venía del pool, regresa al pool.
-      const prevHoleId = this.dragState.prevHoleId;
-      if (prevHoleId) {
-        const hole = this.holes.find((h) => h.id === prevHoleId);
-        if (hole) {
-          piece.mesh.position.set(hole.position.x, 0, hole.position.z);
-          hole.occupied = true;
-          piece.holeId = hole.id;
+
+    if (snapped) {
+      // Si venía del pool (no estaba colocado), consume 1 del contador.
+      if (!cameFromPlaced) {
+        const counts = pieceCountState.getCounts();
+        if (piece.type === 'white') {
+          pieceCountState.setCounts({ whiteRemaining: Math.max(0, (counts.whiteRemaining ?? 0) - 1) });
         } else {
+          pieceCountState.setCounts({ blackRemaining: Math.max(0, (counts.blackRemaining ?? 0) - 1) });
+        }
+      }
+      this._syncPoolsFromCounts();
+    } else {
+      // No hizo snap.
+      if (cameFromPlaced) {
+        // Si soltó fuera del tablero, “elimina” del tablero y devuelve al pool (contador +1)
+        const inside = this._isInsideBoardXZ(piece.mesh.position.x, piece.mesh.position.z);
+        if (!inside) {
+          // Devuelve a pool
           piece.mesh.position.copy(piece.home);
+          piece.holeId = null;
+
+          const counts = pieceCountState.getCounts();
+          if (piece.type === 'white') {
+            pieceCountState.setCounts({ whiteRemaining: Math.min(21, (counts.whiteRemaining ?? 0) + 1) });
+          } else {
+            pieceCountState.setCounts({ blackRemaining: Math.min(21, (counts.blackRemaining ?? 0) + 1) });
+          }
+
+          this._syncPoolsFromCounts();
+        } else {
+          // Si soltó dentro del tablero pero no cerca de hueco, regresa a su hueco anterior
+          const hole = this.holes.find((h) => h.id === prevHoleId);
+          if (hole) {
+            const pegH = this.boardCfg.hexHeight * 0.85; //Aquí checar
+            piece.mesh.position.set(hole.position.x, hole.position.y - pegH, hole.position.z);
+            hole.occupied = true;
+            piece.holeId = hole.id;
+          } else {
+            piece.mesh.position.copy(piece.home);
+          }
         }
       } else {
+        // Venía del pool: regresa al pool (no consume)
         piece.mesh.position.copy(piece.home);
+        this._syncPoolsFromCounts();
       }
     }
 
@@ -750,9 +1026,9 @@ export default class ThreeBoardMode {
     if (!best || bestD > threshold) return false;
 
     // Snap
-    // Al “encajar”, la base del peg queda a nivel de la base del tablero (y=0)
-    // para que el peg atraviese el hex y la cabeza quede arriba.
-    piece.mesh.position.set(best.position.x, 0, best.position.z);
+    // Al “encajar”, la base del peg queda a nivel de la parte superior del Hex (Y del Hueco).
+    const pegH = this.boardCfg.hexHeight * 0.85; // mismo cálculo que usas al crear la pieza
+    piece.mesh.position.set(best.position.x, best.position.y - pegH, best.position.z);
     best.occupied = true;
     piece.holeId = best.id;
     return true;
@@ -765,12 +1041,16 @@ export default class ThreeBoardMode {
     const size = box.getSize(new THREE.Vector3());
     const maxXZ = Math.max(size.x, size.z);
 
-    // Cámara fija inclinada (tipo “juego de mesa”)
-    const dist = Math.max(320, maxXZ * 1.25);
-    const height = Math.max(220, maxXZ * 0.9);
+    // Altura base (igual que antes, para que encuadre bien el tablero)
+    const height = Math.max(220, maxXZ * 0.9); //Aquí se cambia el tamaño del tablero
+
+    // Vista casi cenital: 10° de inclinación desde arriba (vertical)
+    const tiltDeg = 40; //Aquí se cambia la inclinación del tablero
+    const tiltRad = (tiltDeg * Math.PI) / 180;
+    const dist = Math.max(1, height * Math.tan(tiltRad));
 
     this.camera.position.set(0, height, dist);
-    this.camera.lookAt(0, 0, 0);
+    this.camera.lookAt(0, -100, 0); //Aquí se cambia para mover el tablero
     this.camera.updateProjectionMatrix();
   }
 
