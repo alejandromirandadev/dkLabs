@@ -8,9 +8,14 @@
   "hex": {
     "sideLength": 50,
     "strokeWidth": 2,
-    "fillColor": "#557D46",
-    "baseFillColor": "#D0C48F",
-    "strokeColor": "#0000ff"
+    "outlineWidth3D": 3,
+    "fillColor": "#5B5A42",
+    "baseFillColor": "#5B5A42",
+    "strokeColor": "#D0C48F",
+    "textureFolder": "assets/images/hex_textures/",
+    "textures": ["t1.png", "t2.png", "t3.png"],
+    "textureRotationDeg": 0,
+    "textureRepeat": [0.50, 0.50]
   },
   "nodes": {
     "radius": 7,

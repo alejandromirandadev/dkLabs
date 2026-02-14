@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { pieceCountState } from '../state/PieceCountState';
 
+import { Line2 } from 'three/examples/jsm/lines/Line2.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
+import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 /**
  * ThreeBoardMode
  * - Monta/desmonta un renderer de Three.js en un contenedor.
@@ -88,6 +91,15 @@ export default class ThreeBoardMode {
      *         black: { sprite: THREE.Sprite, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, texture: THREE.CanvasTexture } | null } | null}
      */
     this.counter3D = null;
+
+    /**
+     * Texturas cargadas para la cara superior de los Hex (aleatorias).
+     * @type {THREE.Texture[] | null}
+     */
+    this.hexTopTextures = null;
+
+     /** @type {LineMaterial | null} */
+    this.hexOutlineMat = null;
   }
 
   get isMounted() {
@@ -209,6 +221,14 @@ export default class ThreeBoardMode {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(width, height);
+
+    // Color space correcto (para que las texturas se vean como el PNG)
+    if ('outputColorSpace' in this.renderer) this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    else this.renderer.outputEncoding = THREE.sRGBEncoding;
+
+    // Para que el color no se “cocine” por tone mapping/exposure
+    this.renderer.toneMapping = THREE.NoToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
 
     // CLAVE: fondo transparente (para que se vea el background del contenedor si lo usas)
     this.renderer.setClearColor(0x000000, 0);
@@ -353,6 +373,9 @@ export default class ThreeBoardMode {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
+    if (this.hexOutlineMat) {
+      this.hexOutlineMat.resolution.set(width, height);
+    }
   }
 
   _tick() {
@@ -425,6 +448,129 @@ export default class ThreeBoardMode {
       metalness: 0.0,
     });
 
+    // Texturas (cara superior) desde JSON: folder + manifest
+    const textureFolder = config?.hex?.textureFolder ?? null;
+    const textureList = Array.isArray(config?.hex?.textures) ? config.hex.textures : [];
+
+    // --- Top overlay (SOLO cara superior) ---
+    // topGeo se comparte, PERO la textura se clona por hex para poder offset aleatorio
+    let topGeo = null;
+
+    if (textureFolder && textureList.length) {
+      const base = (import.meta?.env?.BASE_URL ?? '/');
+      const folder = textureFolder.startsWith('/') ? textureFolder.slice(1) : textureFolder;
+      const loader = new THREE.TextureLoader();
+
+      this.hexTopTextures = textureList
+        .filter((name) => typeof name === 'string' && name.trim().length)
+        .map((name) => {
+          const file = name.startsWith('/') ? name.slice(1) : name;
+          const url = `${base.endsWith('/') ? base : base + '/'}${folder}${folder.endsWith('/') ? '' : '/'}${file}`;
+          
+          const tex = loader.load(url);
+          if ('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace;
+          else tex.encoding = THREE.sRGBEncoding;
+
+          // No configurar wrap/repeat/mipmaps aquí.
+          // Aquí solo dejamos la textura "limpia" y hacemos calidad.
+          tex.wrapS = THREE.ClampToEdgeWrapping;
+          tex.wrapT = THREE.ClampToEdgeWrapping;
+
+          tex.generateMipmaps = true;
+          tex.minFilter = THREE.LinearMipmapLinearFilter;
+          tex.magFilter = THREE.LinearFilter;
+
+          if (this.renderer?.capabilities?.getMaxAnisotropy) {
+            tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+          }
+
+          tex.needsUpdate = true;
+
+          // Mejora fuerte en ángulos
+          if (this.renderer?.capabilities?.getMaxAnisotropy) {
+            tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+          }
+
+          return tex;
+        });
+
+      if (this.hexTopTextures.length) {
+        // Shape del hex (CON holes, para no tapar los Huecos)
+        const vertsTop = this._computeHexVerticesFlatTop2D(0, 0, sideLength);
+        const topShape = new THREE.Shape();
+        topShape.moveTo(vertsTop[0].x, vertsTop[0].y);
+        for (let i = 1; i < vertsTop.length; i++) topShape.lineTo(vertsTop[i].x, vertsTop[i].y);
+        topShape.closePath();
+
+        // Misma distribución de Huecos que el Hex superior
+        const holePointsTop = this._computeHolePoints2D({ sideLength, nodeRadius, nodeMargin });
+        for (const hp of holePointsTop) {
+          const hole = new THREE.Path();
+          hole.absellipse(hp.x, hp.y, nodeRadius, nodeRadius, 0, Math.PI * 2, false, 0);
+          topShape.holes.push(hole);
+        }
+
+        // ShapeGeometry viene en XY; la rotamos para que quede en XZ.
+        topGeo = new THREE.ShapeGeometry(topShape);
+        topGeo.rotateX(-Math.PI / 2);
+
+        // NORMALIZAR UVs (0..1) para que el PNG se vea fiel (sin estirarse/rararse)
+        topGeo.computeBoundingBox();
+        const bbTop = topGeo.boundingBox;
+        if (bbTop) {
+          const minX = bbTop.min.x, maxX = bbTop.max.x;
+          const minZ = bbTop.min.z, maxZ = bbTop.max.z;
+
+          const dx = Math.max(1e-6, maxX - minX);
+          const dz = Math.max(1e-6, maxZ - minZ);
+
+          const pos = topGeo.attributes.position;
+          const uvs = new Float32Array(pos.count * 2);
+
+          for (let i = 0; i < pos.count; i++) {
+            const x = pos.getX(i);
+            const z = pos.getZ(i);
+            uvs[i * 2 + 0] = (x - minX) / dx; // U
+            uvs[i * 2 + 1] = (z - minZ) / dz; // V
+          }
+
+          topGeo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+          topGeo.attributes.uv.needsUpdate = true;
+        }
+
+        topGeo.computeVertexNormals();
+      }
+    } else {
+      this.hexTopTextures = null;
+    }
+
+    const outlineWidth3D = config?.hex?.outlineWidth3D ?? 2;
+    const strokeColor = this._parseHexColor(config?.hex?.strokeColor ?? '#ffffff', 0xffffff);
+
+    // Material Line2 (grosor real)
+    this.hexOutlineMat = new LineMaterial({
+      color: strokeColor,
+      linewidth: outlineWidth3D, // en pixeles
+    });
+
+    // resolution inicial
+    const w = this.container?.clientWidth ?? window.innerWidth;
+    const h = this.container?.clientHeight ?? window.innerHeight;
+    this.hexOutlineMat.resolution.set(w, h);
+
+    // Geometría de contorno (HEX exterior). La reutilizamos para todas las celdas.
+    const outlineVerts2D = this._computeHexVerticesFlatTop2D(0, 0, sideLength);
+    const yOutline = hexHeight + 0.002; // un pelín arriba para evitar z-fighting con la tapa
+    const outlinePositions = [];
+    for (let i = 0; i < outlineVerts2D.length; i++) {
+      outlinePositions.push(outlineVerts2D[i].x, yOutline, outlineVerts2D[i].y);
+    }
+    // cerrar loop repitiendo el primero
+    outlinePositions.push(outlineVerts2D[0].x, yOutline, outlineVerts2D[0].y);
+
+    const outlineGeo = new LineGeometry();
+    outlineGeo.setPositions(outlinePositions);
+
     const baseHexColor = this._parseHexColor(
       config?.hex?.baseFillColor ?? '#151e2b',
       0x151e2b
@@ -476,6 +622,52 @@ export default class ThreeBoardMode {
           mesh.position.set(x, 0, z);
           mesh.userData = { cellId, q, r };
           group.add(mesh);
+
+          // Textura aleatoria SOLO en la cara superior (overlay)
+          if (topGeo && this.hexTopTextures && this.hexTopTextures.length) {
+            const idx = Math.floor(Math.random() * this.hexTopTextures.length);
+
+            // CLAVE: clonamos textura para poder offset distinto por Hex
+            const srcTex = this.hexTopTextures[idx];
+            const tex = srcTex.clone();
+            tex.needsUpdate = true;
+
+            // FIEL al PNG: sin zoom/recorte, sin offset aleatorio
+            tex.wrapS = THREE.ClampToEdgeWrapping;
+            tex.wrapT = THREE.ClampToEdgeWrapping;
+            tex.repeat.set(1, 1);
+            tex.offset.set(0, 0);
+
+            // --- Quitar granulado (mipmaps + anisotropy) ---
+            tex.generateMipmaps = true;
+            tex.minFilter = THREE.LinearMipmapLinearFilter;
+            tex.magFilter = THREE.LinearFilter;
+
+            if (this.renderer?.capabilities?.getMaxAnisotropy) {
+              tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+            }
+
+            tex.needsUpdate = true;
+
+            // Material unlit => colores casi iguales al PNG
+            const topMat = new THREE.MeshBasicMaterial({ map: tex });
+
+            const topMesh = new THREE.Mesh(topGeo, topMat);
+            topMesh.castShadow = false;
+            topMesh.receiveShadow = false;
+
+            // La ponemos apenas arriba de la tapa del hex para evitar z-fighting
+            topMesh.position.set(x, hexHeight + 0.12, z);
+            topMesh.userData = { cellId, q, r, isTopTexture: true, textureIndex: idx };
+            group.add(topMesh);
+          }
+
+          // Outline SOLO para Hex superior
+          const outline = new Line2(outlineGeo, this.hexOutlineMat);
+          outline.computeLineDistances();
+          outline.position.set(x, 0, z);
+          outline.userData = { cellId, q, r, isOutline: true };
+          group.add(outline);
 
           // Calcula “Huecos” lógicos (slots) para snap futuro
           const localHolePoints = this._computeHolePoints2D({ sideLength, nodeRadius, nodeMargin });
