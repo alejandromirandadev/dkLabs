@@ -59,6 +59,12 @@ h1 {
   inset: 0;
   z-index: 90;
   display: none;
+
+  /* Fondo fijo del modo 3D */
+  background-image: url("/assets/images/background2.png");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
 #threeRoot.is-active {

@@ -171,22 +171,6 @@ export default class ThreeBoardMode {
     this.scene = new THREE.Scene();
     //this.scene.background = new THREE.Color(0x0b1020); //Aquí cambia el color del fondo 3d
 
-      new THREE.TextureLoader().load(
-    "assets/images/background2.png",
-    (tex) => {
-      // sRGB según versión de Three
-      if ("colorSpace" in tex) tex.colorSpace = THREE.SRGBColorSpace;
-      else tex.encoding = THREE.sRGBEncoding;
-
-      this.scene.background = tex;
-      console.log("[ThreeBoardMode] Background loaded:", "assets/images/background2.png");
-    },
-    undefined,
-    (err) => {
-      console.error("[ThreeBoardMode] Background FAILED to load:", "assets/images/background2.png", err);
-    }
-  );
-
     // Fondo 3D con imagen fija (diagnóstico + ruta robusta con Vite BASE_URL)
     const base = (import.meta?.env?.BASE_URL ?? '/');
     const bgUrl = `${base.endsWith('/') ? base : base + '/'}assets/images/background2.png`;
@@ -223,12 +207,14 @@ export default class ThreeBoardMode {
 
     // Renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    this.renderer.setClearAlpha(0);
-    this.renderer.setClearColor(0x000000, 0); // <-- fuerza alpha 0 en el clear
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(width, height);
+
+    // CLAVE: fondo transparente (para que se vea el background del contenedor si lo usas)
+    this.renderer.setClearColor(0x000000, 0);
+
     this.container.appendChild(this.renderer.domElement);
-    this.renderer.domElement.style.background = "transparent"; // <-- fuerza CSS del canvas
+    this.renderer.domElement.style.background = 'transparent';
 
     // Fondo fijo vía CSS usando la misma URL validada (bgUrl)
     this.container.style.backgroundImage = `url('${bgUrl}')`;
@@ -248,7 +234,13 @@ export default class ThreeBoardMode {
     // Piso “sutil” para referencia
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(4000, 4000),
-      new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 1.0, metalness: 0.0 }) //Aquí cambia el color de la Hex
+      new THREE.MeshStandardMaterial({ 
+        color: 0x334155,
+        roughness: 1.0,
+        metalness: 0.0,
+        transparent: true,
+        opacity: 0.05   // <-- Aquí se puede ajustar entre 0.05 y 0.3 si se quiere más o menos visible
+      })
     );
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = -0.02;
@@ -1095,7 +1087,7 @@ export default class ThreeBoardMode {
     const dist = Math.max(1, height * Math.tan(tiltRad));
 
     this.camera.position.set(0, height, dist);
-    this.camera.lookAt(0, -100, 0); //Aquí se cambia para mover el tablero
+    this.camera.lookAt(0, -75, 0); //Aquí se cambia para mover el tablero
     this.camera.updateProjectionMatrix();
   }
 
