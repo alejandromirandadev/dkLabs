@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
 /**
  * ThreeBoardMode
@@ -76,6 +77,12 @@ export default class ThreeBoardMode {
 
     /** @type {AbortController | null} */
     this._abort = null;
+
+    // Visual assets (procedural textures / materials)
+    this._assets = {
+      /** @type {THREE.Texture|null} */
+      woodMap: null,
+    };
   }
 
   get isMounted() {
@@ -153,7 +160,7 @@ export default class ThreeBoardMode {
 
     // Scene
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x0f0f10);
+    this.scene.background = new THREE.Color(0x0b0b0c);
 
     // Camera (fija tipo tablero)
     const { width, height } = this._getSize();
@@ -161,19 +168,55 @@ export default class ThreeBoardMode {
     this.camera.position.set(0, 220, 320);
     this.camera.lookAt(0, 0, 0);
 
-    // Lights
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x222233, 0.9);
-    this.scene.add(hemi);
-
-    const dir = new THREE.DirectionalLight(0xffffff, 1.2);
-    dir.position.set(120, 300, 180);
-    this.scene.add(dir);
-
     // Renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(width, height);
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.05;
+
+    // Sombras suaves
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
     this.container.appendChild(this.renderer.domElement);
+
+    // Environment lighting (look "pro" sin HDRI externo)
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    const envTex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    pmrem.dispose();
+    this.scene.environment = envTex;
+
+    // Lights (setup tipo estudio)
+    const ambient = new THREE.AmbientLight(0xffffff, 0.18);
+    this.scene.add(ambient);
+
+    // Key light
+    const key = new THREE.DirectionalLight(0xffffff, 1.25);
+    key.position.set(180, 320, 160);
+    key.castShadow = true;
+    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.camera.near = 10;
+    key.shadow.camera.far = 1200;
+    key.shadow.camera.left = -500;
+    key.shadow.camera.right = 500;
+    key.shadow.camera.top = 500;
+    key.shadow.camera.bottom = -500;
+    key.shadow.bias = -0.0005;
+    this.scene.add(key);
+
+    // Fill light (suave)
+    const fill = new THREE.DirectionalLight(0xffffff, 0.55);
+    fill.position.set(-220, 220, 80);
+    fill.castShadow = false;
+    this.scene.add(fill);
+
+    // Rim light (separa piezas del fondo)
+    const rim = new THREE.DirectionalLight(0xffffff, 0.35);
+    rim.position.set(0, 260, -260);
+    rim.castShadow = false;
+    this.scene.add(rim);
 
     // Interaction setup
     this.raycaster = new THREE.Raycaster();
@@ -183,13 +226,14 @@ export default class ThreeBoardMode {
     window.addEventListener('pointermove', this._onPointerMove);
     window.addEventListener('pointerup', this._onPointerUp);
 
-    // Piso “sutil” para referencia
+    // Piso (mesa) para recibir sombras
     const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(4000, 4000),
-      new THREE.MeshStandardMaterial({ color: 0x0b0b0c, roughness: 1.0, metalness: 0.0 })
+      new THREE.PlaneGeometry(5000, 5000),
+      new THREE.MeshStandardMaterial({ color: 0x070708, roughness: 1.0, metalness: 0.0 })
     );
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = -0.02;
+    floor.receiveShadow = true;
     this.scene.add(floor);
 
     // Carga + generación del tablero desde el JSON existente
@@ -221,6 +265,11 @@ export default class ThreeBoardMode {
 
     // Clean up scene objects
     if (this.scene) {
+      // Environment texture
+      try {
+        this.scene.environment?.dispose?.();
+      } catch (_) {}
+
       this.scene.traverse((obj) => {
         // dispose geometries/materials
         if (obj.isMesh) {
@@ -265,6 +314,12 @@ export default class ThreeBoardMode {
       } catch (_) {}
     }
     this.snapPreview = null;
+
+    // Dispose procedural textures
+    try {
+      this._assets.woodMap?.dispose?.();
+    } catch (_) {}
+    this._assets.woodMap = null;
   }
 
   // =====================
@@ -350,11 +405,15 @@ export default class ThreeBoardMode {
     const group = new THREE.Group();
     group.name = 'Board3D';
 
-    const hexColor = this._parseHexColor(config?.hex?.fillColor ?? '#1b1b1b', 0x1b1b1b);
-    const mat = new THREE.MeshStandardMaterial({
-      color: hexColor,
-      roughness: 0.85,
+    // Material: “ébano” con tinte basado en el fillColor del JSON (acabado pro)
+    const boardTint = this._parseHexColor(config?.hex?.fillColor ?? '#1b1b1b', 0x1b1b1b);
+    const mat = this._createWoodMaterial({
+      tint: this._makeEbonyTint(boardTint),
+      tintStrength: this._suggestBoardTintStrength(boardTint),
+      roughness: 0.55,
       metalness: 0.0,
+      clearcoat: 0.25,
+      clearcoatRoughness: 0.35,
     });
 
     // Una sola geometría reutilizable (misma forma/holes para cada celda)
@@ -449,16 +508,25 @@ export default class ThreeBoardMode {
     const pegH = Math.max(hexHeight * 0.85, holeR * 1.2);
     const totalH = pegH + headH;
 
-    // Materiales
-    const whiteMat = new THREE.MeshStandardMaterial({
-      color: this._parseHexColor(piecesCfg?.types?.white?.fillColor ?? '#f2f2f2', 0xf2f2f2),
-      roughness: 0.6,
-      metalness: 0.05,
+    // Materiales (madera teñida + acabado). Las piezas pueden tener tinte más evidente que el tablero.
+    const whiteTint = this._parseHexColor(piecesCfg?.types?.white?.fillColor ?? '#f2f2f2', 0xf2f2f2);
+    const blackTint = this._parseHexColor(piecesCfg?.types?.black?.fillColor ?? '#1a1a1a', 0x1a1a1a);
+
+    const whiteMat = this._createWoodMaterial({
+      tint: whiteTint,
+      tintStrength: 0.55,
+      roughness: 0.42,
+      metalness: 0.0,
+      clearcoat: 0.35,
+      clearcoatRoughness: 0.25,
     });
-    const blackMat = new THREE.MeshStandardMaterial({
-      color: this._parseHexColor(piecesCfg?.types?.black?.fillColor ?? '#1a1a1a', 0x1a1a1a),
-      roughness: 0.6,
-      metalness: 0.05,
+    const blackMat = this._createWoodMaterial({
+      tint: this._makeEbonyTint(blackTint),
+      tintStrength: this._suggestPieceTintStrength(blackTint),
+      roughness: 0.48,
+      metalness: 0.0,
+      clearcoat: 0.3,
+      clearcoatRoughness: 0.28,
     });
 
     const group = new THREE.Group();
@@ -806,10 +874,18 @@ export default class ThreeBoardMode {
     }
 
     // 3) Extrude (depth = height)
+    // Bevel sutil: en materiales oscuros (ébano) es CLAVE para que la luz “agarre” bonito.
+    const bevelThickness = Math.max(0.6, Math.min(nodeRadius * 0.22, height * 0.18));
+    const bevelSize = Math.max(0.5, Math.min(nodeRadius * 0.18, height * 0.14));
+
     const geo = new THREE.ExtrudeGeometry(shape, {
       depth: height,
-      bevelEnabled: false,
       curveSegments: 32,
+      bevelEnabled: true,
+      bevelSegments: 3,
+      bevelThickness,
+      bevelSize,
+      bevelOffset: 0,
     });
 
     // ExtrudeGeometry extruye en +Z. Rotamos para que la altura sea +Y y el tablero quede en XZ.
@@ -864,5 +940,122 @@ export default class ThreeBoardMode {
     }
 
     return out;
+  }
+
+  // =====================
+  // Visual quality: wood (é...)
+  // =====================
+
+  _ensureWoodMap() {
+    if (this._assets.woodMap) return this._assets.woodMap;
+
+    // Procedural wood texture (CanvasTexture) — no external assets.
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      const tex = new THREE.Texture();
+      this._assets.woodMap = tex;
+      return tex;
+    }
+
+    // Base (dark ebony-ish)
+    ctx.fillStyle = '#0a090b';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Soft grain lines
+    for (let i = 0; i < 220; i++) {
+      const y = Math.random() * canvas.height;
+      const w = canvas.width;
+      const amp = 6 + Math.random() * 18;
+      const freq = 0.006 + Math.random() * 0.018;
+      const phase = Math.random() * Math.PI * 2;
+
+      const alpha = 0.02 + Math.random() * 0.06;
+      const light = 16 + Math.floor(Math.random() * 28);
+      ctx.strokeStyle = `rgba(${light},${light},${light},${alpha})`;
+      ctx.lineWidth = 1 + Math.random() * 1.2;
+      ctx.beginPath();
+      for (let x = 0; x <= w; x += 8) {
+        const yy = y + Math.sin(x * freq + phase) * amp * (0.2 + Math.random() * 0.3);
+        if (x === 0) ctx.moveTo(x, yy);
+        else ctx.lineTo(x, yy);
+      }
+      ctx.stroke();
+    }
+
+    // Subtle vignette
+    const grad = ctx.createRadialGradient(256, 256, 40, 256, 256, 360);
+    grad.addColorStop(0, 'rgba(0,0,0,0.0)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.28)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(2.2, 2.2);
+    tex.anisotropy = 8;
+    tex.needsUpdate = true;
+
+    this._assets.woodMap = tex;
+    return tex;
+  }
+
+  _createWoodMaterial({ tint, tintStrength = 0.25, roughness = 0.55, metalness = 0, clearcoat = 0.25, clearcoatRoughness = 0.35 }) {
+    const map = this._ensureWoodMap();
+
+    // Tin... etc
+    const base = new THREE.Color('#0b0a0c');
+    const tc = tint instanceof THREE.Color ? tint.clone() : new THREE.Color(tint ?? 0xffffff);
+    const color = base.clone().lerp(tc, THREE.MathUtils.clamp(tintStrength, 0, 1));
+
+    const mat = new THREE.MeshPhysicalMaterial({
+      map,
+      color,
+      roughness: THREE.MathUtils.clamp(roughness, 0.04, 1),
+      metalness: THREE.MathUtils.clamp(metalness, 0, 1),
+      clearcoat: THREE.MathUtils.clamp(clearcoat, 0, 1),
+      clearcoatRoughness: THREE.MathUtils.clamp(clearcoatRoughness, 0.04, 1),
+      sheen: 0.0,
+    });
+
+    return mat;
+  }
+
+  _suggestBoardTintStrength(color) {
+    // Board should remain “ebony base” (pro). Only subtle tint unless the color is very bright.
+    const c = color instanceof THREE.Color ? color : new THREE.Color(color ?? 0xffffff);
+    const l = this._luminance(c);
+    if (l < 0.12) return 0.08;
+    if (l < 0.28) return 0.18;
+    return 0.25;
+  }
+
+  _suggestPieceTintStrength(color) {
+    // Pieces can carry more color while still looking premium.
+    const c = color instanceof THREE.Color ? color : new THREE.Color(color ?? 0xffffff);
+    const l = this._luminance(c);
+    if (l > 0.75) return 0.5; // very light colors: keep tasteful
+    if (l < 0.12) return 0.22; // very dark: stay ebony-ish
+    return 0.65;
+  }
+
+  _makeEbonyTint(color) {
+    // Keep it deep; clamp to dark range so “red ebony” becomes wine/dark-red, etc.
+    const c = color instanceof THREE.Color ? color.clone() : new THREE.Color(color ?? 0xffffff);
+    // Pull toward dark base
+    const ebony = new THREE.Color('#0b0a0c');
+    c.lerp(ebony, 0.35);
+    // Slightly darken
+    c.multiplyScalar(0.75);
+    return c;
+  }
+
+  _luminance(color) {
+    // sRGB approx
+    return 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
   }
 }
