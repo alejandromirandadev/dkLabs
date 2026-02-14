@@ -425,12 +425,33 @@ export default class ThreeBoardMode {
       metalness: 0.0,
     });
 
-    // Una sola geometría reutilizable (misma forma/holes para cada celda)
+    const baseHexColor = this._parseHexColor(
+      config?.hex?.baseFillColor ?? '#151e2b',
+      0x151e2b
+    );
+    const baseMat = new THREE.MeshStandardMaterial({
+      color: baseHexColor,
+      roughness: 0.85,
+      metalness: 0.0,
+    });
+
+    // Una sola geometría reutilizable (capa superior CON Huecos)
     const hexGeo = this._createHexExtrudeGeometry({
       sideLength,
       nodeRadius,
       nodeMargin,
       height: hexHeight,
+      withHoles: true,
+    });
+
+    // Capa base SIN Huecos (2x altura)
+    const baseHeight = hexHeight * 2;
+    const baseGeo = this._createHexExtrudeGeometry({
+      sideLength,
+      nodeRadius,
+      nodeMargin,
+      height: baseHeight,
+      withHoles: false,
     });
 
     // Generación igual que en Board.js (axial coords)
@@ -440,6 +461,15 @@ export default class ThreeBoardMode {
           const { x, z } = this._axialToWorldXZ(q, r, sideLength);
           const cellId = `${q},${r}`;
 
+          // Base (debajo, sólida)
+          const baseMesh = new THREE.Mesh(baseGeo, baseMat);
+          baseMesh.castShadow = false;
+          baseMesh.receiveShadow = true;
+          baseMesh.position.set(x, -baseHeight - 0.001, z); // evita z-fighting con el Hex superior
+          baseMesh.userData = { cellId, q, r, isBase: true };
+          group.add(baseMesh);
+
+          // Hex superior (con Huecos)
           const mesh = new THREE.Mesh(hexGeo, mat);
           mesh.castShadow = false;
           mesh.receiveShadow = true;
@@ -459,27 +489,24 @@ export default class ThreeBoardMode {
               id,
               cellId,
               type: hp.type,
-              sideIndex: hp.sideIndex,
+              sideIndex: hp.sideIndex ?? null,
               position: pos,
-              occupied: false,
             });
           }
         }
       }
     }
 
-    // Centrar el tablero en (0,0,0)
+    // Centrar el tablero en (0,0,0) SOLO en XZ (dejamos Y tal cual para que el pedestal baje)
     const box = new THREE.Box3().setFromObject(group);
     const center = box.getCenter(new THREE.Vector3());
-    group.position.sub(center);
+    group.position.x -= center.x;
+    group.position.z -= center.z;
 
-    // Queremos que el tablero “se sienta” sobre el piso, así que lo subimos para que la base no quede bajo 0
-    // (Tras centrar, el y-center estará ~hexHeight/2)
-    group.position.y += hexHeight / 2;
-
-    // IMPORTANT: Ajustar posiciones de holes al shift aplicado al grupo
+    // IMPORTANT: Ajustar posiciones de holes al shift aplicado al grupo (solo XZ)
     for (const h of this.holes) {
-      h.position.add(group.position);
+      h.position.x += group.position.x;
+      h.position.z += group.position.z;
     }
 
     // Asegura el indicador visual de snap
@@ -1079,15 +1106,15 @@ export default class ThreeBoardMode {
     const maxXZ = Math.max(size.x, size.z);
 
     // Altura base (igual que antes, para que encuadre bien el tablero)
-    const height = Math.max(220, maxXZ * 0.9); //Aquí se cambia el tamaño del tablero
+    const height = Math.max(220, maxXZ * 1); //Aquí se cambia el tamaño del tablero
 
     // Vista casi cenital: 10° de inclinación desde arriba (vertical)
-    const tiltDeg = 40; //Aquí se cambia la inclinación del tablero
+    const tiltDeg = 35; //Aquí se cambia la inclinación del tablero
     const tiltRad = (tiltDeg * Math.PI) / 180;
     const dist = Math.max(1, height * Math.tan(tiltRad));
 
     this.camera.position.set(0, height, dist);
-    this.camera.lookAt(0, -75, 0); //Aquí se cambia para mover el tablero
+    this.camera.lookAt(0, -50, 0); //Aquí se cambia para mover el tablero
     this.camera.updateProjectionMatrix();
   }
 
@@ -1106,7 +1133,7 @@ export default class ThreeBoardMode {
     return parseInt(m[1], 16);
   }
 
-  _createHexExtrudeGeometry({ sideLength, nodeRadius, nodeMargin, height }) {
+  _createHexExtrudeGeometry({ sideLength, nodeRadius, nodeMargin, height, withHoles = true }) {
     // 1) Shape base (hex regular flat-top)
     const verts = this._computeHexVerticesFlatTop2D(0, 0, sideLength);
     const shape = new THREE.Shape();
@@ -1114,12 +1141,14 @@ export default class ThreeBoardMode {
     for (let i = 1; i < verts.length; i++) shape.lineTo(verts[i].x, verts[i].y);
     shape.closePath();
 
-    // 2) Holes: 1 centro + 6 laterales
-    const holePoints = this._computeHolePoints2D({ sideLength, nodeRadius, nodeMargin });
-    for (const hp of holePoints) {
-      const hole = new THREE.Path();
-      hole.absellipse(hp.x, hp.y, nodeRadius, nodeRadius, 0, Math.PI * 2, false, 0);
-      shape.holes.push(hole);
+    // 2) Holes: 1 centro + 6 laterales (opcional)
+    if (withHoles) {
+      const holePoints = this._computeHolePoints2D({ sideLength, nodeRadius, nodeMargin });
+      for (const hp of holePoints) {
+        const hole = new THREE.Path();
+        hole.absellipse(hp.x, hp.y, nodeRadius, nodeRadius, 0, Math.PI * 2, false, 0);
+        shape.holes.push(hole);
+      }
     }
 
     // 3) Extrude (depth = height)

@@ -8,8 +8,9 @@
   "hex": {
     "sideLength": 50,
     "strokeWidth": 2,
-    "fillColor": "#223344", 
-    "strokeColor": "#ffffff"
+    "fillColor": "#557D46",
+    "baseFillColor": "#D0C48F",
+    "strokeColor": "#0000ff"
   },
   "nodes": {
     "radius": 7,
