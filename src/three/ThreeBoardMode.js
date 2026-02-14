@@ -174,7 +174,10 @@ export default class ThreeBoardMode {
     this.renderer.setSize(width, height);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    // Estilo B (videojuego estilizado elegante): un poquito más de "punch"
+    this.renderer.toneMappingExposure = 1.15;
+    // Mantener respuesta física consistente
+    this.renderer.physicallyCorrectLights = true;
 
     // Sombras suaves
     this.renderer.shadowMap.enabled = true;
@@ -188,13 +191,13 @@ export default class ThreeBoardMode {
     pmrem.dispose();
     this.scene.environment = envTex;
 
-    // Lights (setup tipo estudio)
-    const ambient = new THREE.AmbientLight(0xffffff, 0.18);
-    this.scene.add(ambient);
+    // Lights (Estilo B: key cálida + fill fría + rim para silueta)
+    const hemi = new THREE.HemisphereLight(0xa9c4ff, 0x120a10, 0.35);
+    this.scene.add(hemi);
 
     // Key light
-    const key = new THREE.DirectionalLight(0xffffff, 1.25);
-    key.position.set(180, 320, 160);
+    const key = new THREE.DirectionalLight(0xfff0d6, 2.0);
+    key.position.set(210, 360, 180);
     key.castShadow = true;
     key.shadow.mapSize.set(2048, 2048);
     key.shadow.camera.near = 10;
@@ -203,18 +206,18 @@ export default class ThreeBoardMode {
     key.shadow.camera.right = 500;
     key.shadow.camera.top = 500;
     key.shadow.camera.bottom = -500;
-    key.shadow.bias = -0.0005;
+    key.shadow.bias = -0.00025;
     this.scene.add(key);
 
     // Fill light (suave)
-    const fill = new THREE.DirectionalLight(0xffffff, 0.55);
-    fill.position.set(-220, 220, 80);
+    const fill = new THREE.DirectionalLight(0xd7e6ff, 0.9);
+    fill.position.set(-260, 220, 120);
     fill.castShadow = false;
     this.scene.add(fill);
 
     // Rim light (separa piezas del fondo)
-    const rim = new THREE.DirectionalLight(0xffffff, 0.35);
-    rim.position.set(0, 260, -260);
+    const rim = new THREE.DirectionalLight(0xc7d7ff, 0.65);
+    rim.position.set(-40, 260, -320);
     rim.castShadow = false;
     this.scene.add(rim);
 
@@ -405,15 +408,20 @@ export default class ThreeBoardMode {
     const group = new THREE.Group();
     group.name = 'Board3D';
 
-    // Material: “ébano” con tinte basado en el fillColor del JSON (acabado pro)
+    // Material: “madera elegante” (ébano base) tintable por el fillColor del JSON.
+    // Nota: para que el color del JSON se note de verdad, el tablero usa:
+    // - un tinte moderado (premium, no arcade)
+    // - reflectividad controlada (evita look metálico)
     const boardTint = this._parseHexColor(config?.hex?.fillColor ?? '#1b1b1b', 0x1b1b1b);
     const mat = this._createWoodMaterial({
-      tint: this._makeEbonyTint(boardTint),
-      tintStrength: this._suggestBoardTintStrength(boardTint),
-      roughness: 0.55,
+      tint: boardTint,
+      tintStrength: 0.38,
+      // Estilo B: laca/resina oscura tipo madera (no metal)
+      roughness: 0.78,
       metalness: 0.0,
-      clearcoat: 0.25,
-      clearcoatRoughness: 0.35,
+      clearcoat: 0.18,
+      clearcoatRoughness: 0.45,
+      envMapIntensity: 0.35,
     });
 
     // Una sola geometría reutilizable (misma forma/holes para cada celda)
@@ -512,21 +520,28 @@ export default class ThreeBoardMode {
     const whiteTint = this._parseHexColor(piecesCfg?.types?.white?.fillColor ?? '#f2f2f2', 0xf2f2f2);
     const blackTint = this._parseHexColor(piecesCfg?.types?.black?.fillColor ?? '#1a1a1a', 0x1a1a1a);
 
+    // Estilo B "elegante": las piezas cargan más color que el tablero (legibilidad),
+    // pero evitando look metálico: nada de metalness y reflectividad controlada.
     const whiteMat = this._createWoodMaterial({
       tint: whiteTint,
-      tintStrength: 0.55,
-      roughness: 0.42,
+      tintStrength: 0.9,
+      roughness: 0.58,
       metalness: 0.0,
-      clearcoat: 0.35,
-      clearcoatRoughness: 0.25,
+      clearcoat: 0.22,
+      clearcoatRoughness: 0.38,
+      envMapIntensity: 0.45,
+      sheen: 0.0,
     });
     const blackMat = this._createWoodMaterial({
-      tint: this._makeEbonyTint(blackTint),
-      tintStrength: this._suggestPieceTintStrength(blackTint),
-      roughness: 0.48,
+      // Importante: NO ebonizamos aquí; si el JSON trae rojo/azul/verde, debe notarse.
+      tint: blackTint,
+      tintStrength: 0.9,
+      roughness: 0.62,
       metalness: 0.0,
-      clearcoat: 0.3,
-      clearcoatRoughness: 0.28,
+      clearcoat: 0.18,
+      clearcoatRoughness: 0.42,
+      envMapIntensity: 0.42,
+      sheen: 0.0,
     });
 
     const group = new THREE.Group();
@@ -961,7 +976,9 @@ export default class ThreeBoardMode {
     }
 
     // Base (dark ebony-ish)
-    ctx.fillStyle = '#0a090b';
+    // Base neutra (no negra): permite que el tinte del JSON se note.
+    // Luego el material (base oscuro + roughness) es lo que mantiene el “ébano”.
+    ctx.fillStyle = '#9a9a9a';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // Soft grain lines
@@ -972,8 +989,9 @@ export default class ThreeBoardMode {
       const freq = 0.006 + Math.random() * 0.018;
       const phase = Math.random() * Math.PI * 2;
 
-      const alpha = 0.02 + Math.random() * 0.06;
-      const light = 16 + Math.floor(Math.random() * 28);
+      // Veta visible pero discreta (para que se lea como madera sin “ruido”).
+      const alpha = 0.03 + Math.random() * 0.09;
+      const light = 70 + Math.floor(Math.random() * 80);
       ctx.strokeStyle = `rgba(${light},${light},${light},${alpha})`;
       ctx.lineWidth = 1 + Math.random() * 1.2;
       ctx.beginPath();
@@ -1004,11 +1022,21 @@ export default class ThreeBoardMode {
     return tex;
   }
 
-  _createWoodMaterial({ tint, tintStrength = 0.25, roughness = 0.55, metalness = 0, clearcoat = 0.25, clearcoatRoughness = 0.35 }) {
+  _createWoodMaterial({
+    tint,
+    tintStrength = 0.25,
+    roughness = 0.55,
+    metalness = 0,
+    clearcoat = 0.25,
+    clearcoatRoughness = 0.35,
+    envMapIntensity = 1.0,
+    sheen = 0.0,
+  }) {
     const map = this._ensureWoodMap();
 
     // Tin... etc
-    const base = new THREE.Color('#0b0a0c');
+    // Base cálida (madera oscura). Evita lectura “metal gris”.
+    const base = new THREE.Color('#1a120d');
     const tc = tint instanceof THREE.Color ? tint.clone() : new THREE.Color(tint ?? 0xffffff);
     const color = base.clone().lerp(tc, THREE.MathUtils.clamp(tintStrength, 0, 1));
 
@@ -1019,7 +1047,10 @@ export default class ThreeBoardMode {
       metalness: THREE.MathUtils.clamp(metalness, 0, 1),
       clearcoat: THREE.MathUtils.clamp(clearcoat, 0, 1),
       clearcoatRoughness: THREE.MathUtils.clamp(clearcoatRoughness, 0.04, 1),
-      sheen: 0.0,
+      envMapIntensity: THREE.MathUtils.clamp(envMapIntensity, 0, 3),
+      sheen: THREE.MathUtils.clamp(sheen, 0, 1),
+      sheenColor: new THREE.Color('#ffffff'),
+      sheenRoughness: 0.35,
     });
 
     return mat;
