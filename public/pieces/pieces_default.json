@@ -10,12 +10,12 @@
   "types": {
     "white": {
       "count": 21,
-      "fillColor": "#f2f2f2",
+      "fillColor": "#00A2E8",
       "strokeColor": "#1a1a1a"
     },
     "black": {
       "count": 21,
-      "fillColor": "#1a1a1a",
+      "fillColor": "#E80352",
       "strokeColor": "#f2f2f2"
     }
   }
