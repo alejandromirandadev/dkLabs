@@ -17,6 +17,11 @@
       "count": 21,
       "fillColor": "#E80352",
       "strokeColor": "#f2f2f2"
+    },
+    "bw": {
+      "count": 1,
+      "fillColor": "#ffffff",
+      "strokeColor": "#1a1a1a"
     }
   }
 }

@@ -766,7 +766,7 @@ export default class ThreeBoardMode {
     const group = new THREE.Group();
     group.name = 'Pieces3D';
 
-    const makePiece = (type, mat) => {
+        const makePiece = (type, mat) => {
       const g = new THREE.Group();
 
       // Peg (entra en el hueco)
@@ -784,6 +784,38 @@ export default class ThreeBoardMode {
       g.add(head);
 
       g.userData = { kind: 'piece', type };
+      return { obj: g, totalH, headH, pegH };
+    };
+
+    // NUEVO: pieza "bw" (cabeza mitad negra / mitad blanca)
+    const makePieceBW = () => {
+      const g = new THREE.Group();
+
+      // Peg (entra en el hueco) — neutro/oscuro para que no “pelee” con la cabeza
+      const peg = new THREE.Mesh(new THREE.CylinderGeometry(pegR, pegR, pegH, 28), blackMat);
+      peg.position.y = pegH / 2;
+      peg.castShadow = true;
+      peg.receiveShadow = false;
+      g.add(peg);
+
+      // Head mitad negra / mitad blanca (2 semicilindros)
+      const headGeoA = new THREE.CylinderGeometry(headR, headR, headH, 32, 1, false, 0, Math.PI);
+      const headGeoB = new THREE.CylinderGeometry(headR, headR, headH, 32, 1, false, Math.PI, Math.PI);
+
+      const headA = new THREE.Mesh(headGeoA, blackMat);
+      headA.position.y = pegH + headH / 2;
+      headA.castShadow = true;
+      headA.receiveShadow = false;
+
+      const headB = new THREE.Mesh(headGeoB, whiteMat);
+      headB.position.y = pegH + headH / 2;
+      headB.castShadow = true;
+      headB.receiveShadow = false;
+
+      g.add(headA);
+      g.add(headB);
+
+      g.userData = { kind: 'piece', type: 'bw' };
       return { obj: g, totalH, headH, pegH };
     };
 
@@ -828,6 +860,38 @@ export default class ThreeBoardMode {
       const id = `black_${i + 1}`;
       this.pieces.push({ id, type: 'black', mesh: obj, home: new THREE.Vector3(x, y, z), holeId: null });
     }
+
+    // NUEVO: crear 1 pieza bw y colocarla al inicio en el Hueco central del Hex central
+    {
+      const { obj } = makePieceBW();
+      const id = 'bw_1';
+
+      const centerHole = this.holes.find((h) => h.id === '0,0:center:c');
+      if (centerHole && !centerHole.occupied) {
+        obj.position.set(centerHole.position.x, centerHole.position.y - pegH, centerHole.position.z);
+        centerHole.occupied = true;
+        group.add(obj);
+
+        this.pieces.push({
+          id,
+          type: 'bw',
+          mesh: obj,
+          home: new THREE.Vector3(obj.position.x, obj.position.y, obj.position.z),
+          holeId: centerHole.id,
+        });
+      } else {
+        // Fallback ultra seguro (no debería pasar): la deja “guardada” fuera del tablero
+        const x = 0;
+        const y = baseY;
+        const z = poolZMid;
+        obj.position.set(x, y, z);
+        group.add(obj);
+
+        this.pieces.push({ id, type: 'bw', mesh: obj, home: new THREE.Vector3(x, y, z), holeId: null });
+      }
+    }
+
+    this.piecesGroup = group;
 
     this.piecesGroup = group;
     this.scene.add(group);
@@ -1220,18 +1284,36 @@ export default class ThreeBoardMode {
         // Si soltó fuera del tablero, “elimina” del tablero y devuelve al pool (contador +1)
         const inside = this._isInsideBoardXZ(piece.mesh.position.x, piece.mesh.position.z);
         if (!inside) {
-          // Devuelve a pool
-          piece.mesh.position.copy(piece.home);
-          piece.holeId = null;
+          // CASO ESPECIAL: la pieza "bw" NO se puede eliminar. Regresa a su hueco previo (o centro).
+          if (piece.type === 'bw') {
+            const restoreId = prevHoleId || '0,0:center:c';
+            const hole = this.holes.find((h) => h.id === restoreId);
 
-          const counts = pieceCountState.getCounts();
-          if (piece.type === 'white') {
-            pieceCountState.setCounts({ whiteRemaining: Math.min(21, (counts.whiteRemaining ?? 0) + 1) });
+            if (hole) {
+              const pegH = this.boardCfg.hexHeight * 0.85; //Aquí checar
+              piece.mesh.position.set(hole.position.x, hole.position.y - pegH, hole.position.z);
+              hole.occupied = true;
+              piece.holeId = hole.id;
+            } else {
+              // Fallback ultra seguro: si no existe el hueco, no la mandes al pool; déjala en home.
+              piece.mesh.position.copy(piece.home);
+            }
+
+            this._syncPoolsFromCounts();
           } else {
-            pieceCountState.setCounts({ blackRemaining: Math.min(21, (counts.blackRemaining ?? 0) + 1) });
-          }
+            // Devuelve a pool
+            piece.mesh.position.copy(piece.home);
+            piece.holeId = null;
 
-          this._syncPoolsFromCounts();
+            const counts = pieceCountState.getCounts();
+            if (piece.type === 'white') {
+              pieceCountState.setCounts({ whiteRemaining: Math.min(21, (counts.whiteRemaining ?? 0) + 1) });
+            } else {
+              pieceCountState.setCounts({ blackRemaining: Math.min(21, (counts.blackRemaining ?? 0) + 1) });
+            }
+
+            this._syncPoolsFromCounts();
+          }
         } else {
           // Si soltó dentro del tablero pero no cerca de hueco, regresa a su hueco anterior
           const hole = this.holes.find((h) => h.id === prevHoleId);

@@ -7,6 +7,7 @@ import { placementState } from "../../state/PlacementState";
 import { pieceCountState } from "../../state/PieceCountState";
 
 export default class BoardScene extends Phaser.Scene {
+
   constructor() {
     super("BoardScene");
     this.backColor = "#0b1020"; //Aquí cambia color del fondo 2d
@@ -17,7 +18,7 @@ export default class BoardScene extends Phaser.Scene {
   }
 
   async create() {
-    this.cameras.main.setBackgroundColor(this.backColor); // azul oscuro elegante
+    this.cameras.main.setBackgroundColor(this.backColor);
 
     // Fondo fijo (no se mueve con la cámara)
     this.boardBg1 = this.add.image(0, 0, "boardBg1")
@@ -28,6 +29,7 @@ export default class BoardScene extends Phaser.Scene {
     // Ajustar para cubrir el canvas
     this.boardBg1.displayWidth = this.scale.width;
     this.boardBg1.displayHeight = this.scale.height;
+
     // 1) Board
     const boardCfg = await fetch("/boards/board_default.json").then((r) => r.json());
     this.board = new Board(this, boardCfg);
@@ -54,11 +56,11 @@ export default class BoardScene extends Phaser.Scene {
       width: poolW,
       height: poolH,
     });
+
     // 2.5) Contadores (desde estado persistido)
     const counts = pieceCountState.getCounts();
     this.poolLeft.setRemaining(counts.whiteRemaining);
     this.poolRight.setRemaining(counts.blackRemaining);
-
 
     // 3) Piezas desde JSON
     const piecesCfg = await fetch("/pieces/pieces_default.json").then((r) => r.json());
@@ -69,6 +71,7 @@ export default class BoardScene extends Phaser.Scene {
     const all = factory.createAllAt(0, 0);
     const whites = all.filter((p) => p.type === "white");
     const blacks = all.filter((p) => p.type === "black");
+    const bw = all.find((p) => p.type === "bw") ?? null;
 
     this.poolLeft.addPieces(whites);
     this.poolRight.addPieces(blacks);
@@ -84,52 +87,97 @@ export default class BoardScene extends Phaser.Scene {
     // 4) Lista de nodos donde se pueden poner piezas
     this.placeNodes = this.board.getAllNodes();
 
-    // 5) Drag & snap (ROBUSTO: eventos globales de input)
-    this.allPieces = [...whites, ...blacks];
+    // Colocar la pieza "bw" SIEMPRE iniciando en el Hueco central del Hex central (0,0)
+    if (bw) {
+      const centerNode = this.placeNodes.find((n) => {
+        return (
+          n.getData("cellId") === "0,0" &&
+          n.getData("type") === "center" &&
+          n.getData("sideIndex") === null
+        );
+      });
 
-    // Marca cada circle como draggable y enlaza referencia a su "Piece"
-    for (const piece of this.allPieces) {
-      piece.circle.setData("pieceRef", piece); // para encontrar la instancia en los handlers
-      piece.circle.setInteractive();
-      this.input.setDraggable(piece.circle);
+      if (centerNode && !centerNode.getData("occupied")) {
+        // Visual + hit deben moverse juntos
+        bw.circle.setPosition(centerNode.x, centerNode.y);
+        if (bw.hit) bw.hit.setPosition(centerNode.x, centerNode.y);
+
+        bw.circle.setDepth(10);
+
+        centerNode.setData("occupied", true);
+        centerNode.setData("pieceId", bw.id);
+
+        // Data en hit (y duplicada en circle para compat)
+        bw.circle.setData("placed", true);
+        bw.circle.setData("nodeKey", "0,0:center:null");
+        if (bw.hit) {
+          bw.hit.setData("placed", true);
+          bw.hit.setData("nodeKey", "0,0:center:null");
+        }
+      }
     }
 
-    // Si quieres que sea más sensible, puedes bajar el threshold:
+    // 5) Drag & snap
+    this.allPieces = bw ? [...whites, ...blacks, bw] : [...whites, ...blacks];
+
+    // draggable en zona invisible (hit). Si no existe hit, fallback a circle.
+    for (const piece of this.allPieces) {
+      const dragObj = piece.hit || piece.circle;
+      dragObj.setData("pieceRef", piece);
+      dragObj.setInteractive();
+      this.input.setDraggable(dragObj);
+    }
+
+    // (Opcional) hacerlo más sensible:
     // this.input.dragDistanceThreshold = 0;
 
+    // ---- Handlers ----
     this.input.on("dragstart", (pointer, gameObject) => {
-      gameObject.setDepth(999);
+      const piece = gameObject.getData("pieceRef");
+      if (!piece) return;
 
-      // IMPORTANTE: guardar si ya estaba colocada ANTES de limpiar nodeKey
+      // Subir el visual
+      piece.circle.setDepth(999);
+
+      // Guardar si ya estaba colocada ANTES de limpiar nodeKey
       const wasPlaced = !!gameObject.getData("placed");
       gameObject.setData("wasPlacedAtDragStart", wasPlaced);
 
-      // Si la pieza ya estaba colocada, libera su Hueco previo para evitar "ocupados fantasma"
       if (wasPlaced) {
         const prevKey = gameObject.getData("nodeKey");
+
+        // Guardar para revert (caso bw)
+        gameObject.setData("nodeKeyAtDragStart", prevKey);
+
+        // liberar nodo previo
         if (typeof prevKey === "string") {
           const prevNode = this.placeNodes.find((n) => {
-            if (!n?.getData) return false;
             const k = `${n.getData("cellId")}:${n.getData("type")}:${n.getData("sideIndex")}`;
             return k === prevKey;
           });
-
           if (prevNode) {
             prevNode.setData("occupied", false);
             prevNode.setData("pieceId", null);
           }
         }
 
-        // Queda "en el aire" durante el drag
+        // queda en el aire (hit + circle)
         gameObject.setData("placed", false);
         gameObject.setData("nodeKey", null);
+        piece.circle.setData("placed", false);
+        piece.circle.setData("nodeKey", null);
       }
     });
 
-
     this.input.on("drag", (pointer, gameObject, dragX, dragY) => {
-      // mueve el objeto que se está arrastrando
+      const piece = gameObject.getData("pieceRef");
+      if (!piece) return;
+
+      // Mover el draggable
       gameObject.setPosition(dragX, dragY);
+
+      // Mover el visual
+      piece.circle.setPosition(dragX, dragY);
     });
 
     this.input.on("dragend", (pointer, gameObject) => {
@@ -145,7 +193,6 @@ export default class BoardScene extends Phaser.Scene {
         nodeRadius * 2.2
       );
 
-      // Helpers de conteo
       const syncCountsToPools = () => {
         const c = pieceCountState.getCounts();
         this.poolLeft.setRemaining(c.whiteRemaining);
@@ -154,72 +201,97 @@ export default class BoardScene extends Phaser.Scene {
         this.poolRight.refreshActivePiece();
       };
 
+      // Soltó fuera del tablero
       if (!target) {
-        // Si venía del tablero y lo soltó fuera -> "eliminar" del tablero y regresar al pool (+1)
+        // bw: no eliminable, regresa a hueco previo o centro
+        if (piece.type === "bw") {
+          const prevKey = gameObject.getData("nodeKeyAtDragStart");
+
+          const prevNode =
+            typeof prevKey === "string"
+              ? this.placeNodes.find((n) => {
+                  const k = `${n.getData("cellId")}:${n.getData("type")}:${n.getData("sideIndex")}`;
+                  return k === prevKey;
+                })
+              : null;
+
+          const fallbackCenter = this.placeNodes.find((n) => {
+            return (
+              n.getData("cellId") === "0,0" &&
+              n.getData("type") === "center" &&
+              n.getData("sideIndex") === null
+            );
+          });
+
+          const nodeToRestore = prevNode ?? fallbackCenter;
+
+          if (nodeToRestore) {
+            gameObject.setPosition(nodeToRestore.x, nodeToRestore.y);
+            piece.circle.setPosition(nodeToRestore.x, nodeToRestore.y);
+            piece.circle.setDepth(10);
+
+            nodeToRestore.setData("occupied", true);
+            nodeToRestore.setData("pieceId", piece.id);
+
+            const nk = `${nodeToRestore.getData("cellId")}:${nodeToRestore.getData("type")}:${nodeToRestore.getData(
+              "sideIndex"
+            )}`;
+
+            gameObject.setData("placed", true);
+            gameObject.setData("nodeKey", nk);
+            piece.circle.setData("placed", true);
+            piece.circle.setData("nodeKey", nk);
+          } else {
+            piece.circle.setDepth(10);
+          }
+
+          placementState.captureFromPhaser(this);
+          syncCountsToPools();
+          return;
+        }
+
+        // white/black: si venía del tablero, devolver 1 al contador
         if (wasPlacedAtStart) {
           const c = pieceCountState.getCounts();
           if (piece.type === "white") c.whiteRemaining = Math.min(21, c.whiteRemaining + 1);
-          else c.blackRemaining = Math.min(21, c.blackRemaining + 1);
+          else if (piece.type === "black") c.blackRemaining = Math.min(21, c.blackRemaining + 1);
           pieceCountState.setCounts(c);
         }
 
         this.#returnToPool(piece);
-        gameObject.setDepth(10);
+        piece.circle.setDepth(10);
 
-        // Persistir placements y refrescar pools
         placementState.captureFromPhaser(this);
         syncCountsToPools();
         return;
       }
 
-      // Snap
+      // Snap a un hueco válido
       gameObject.setPosition(target.x, target.y);
-      gameObject.setDepth(10);
+      piece.circle.setPosition(target.x, target.y);
+      piece.circle.setDepth(10);
 
-      // Ocupa nodo
       target.setData("occupied", true);
       target.setData("pieceId", piece.id);
 
-      // Guarda vínculo
-      gameObject.setData("placed", true);
-      gameObject.setData(
-        "nodeKey",
-        `${target.getData("cellId")}:${target.getData("type")}:${target.getData("sideIndex")}`
-      );
+      const nk = `${target.getData("cellId")}:${target.getData("type")}:${target.getData("sideIndex")}`;
 
-      // Si NO estaba colocada al iniciar el drag => venía del pool => consumir 1 (si hay)
+      gameObject.setData("placed", true);
+      gameObject.setData("nodeKey", nk);
+      piece.circle.setData("placed", true);
+      piece.circle.setData("nodeKey", nk);
+
+      // si venía del pool => consumir 1 (excepto bw)
       if (!wasPlacedAtStart) {
         const c = pieceCountState.getCounts();
-
-        if (piece.type === "white") {
-          // Seguridad: si ya está en 0, no debería poder colocarse
-          if (c.whiteRemaining <= 0) {
-            // Revertir: devolver al pool y salir
-            this.#returnToPool(piece);
-            gameObject.setDepth(10);
-            placementState.captureFromPhaser(this);
-            syncCountsToPools();
-            return;
-          }
-          c.whiteRemaining -= 1;
-        } else {
-          if (c.blackRemaining <= 0) {
-            this.#returnToPool(piece);
-            gameObject.setDepth(10);
-            placementState.captureFromPhaser(this);
-            syncCountsToPools();
-            return;
-          }
-          c.blackRemaining -= 1;
-        }
-
+        if (piece.type === "white") c.whiteRemaining = Math.max(0, c.whiteRemaining - 1);
+        else if (piece.type === "black") c.blackRemaining = Math.max(0, c.blackRemaining - 1);
         pieceCountState.setCounts(c);
       }
 
       placementState.captureFromPhaser(this);
       syncCountsToPools();
     });
-;
 
     // Restaurar placements previos (persistidos) en 2D
     placementState.applyToPhaser(this);
@@ -237,7 +309,6 @@ export default class BoardScene extends Phaser.Scene {
     // Reajustar fondo si cambia el tamaño del canvas
     this.scale.on("resize", (gameSize) => {
       const { width, height } = gameSize;
-
       this.boardBg1.displayWidth = width;
       this.boardBg1.displayHeight = height;
     });
@@ -247,5 +318,8 @@ export default class BoardScene extends Phaser.Scene {
     const homePoolId = piece.circle.getData("homePoolId");
     if (homePoolId === "pool_white") this.poolLeft.returnPieceToHome(piece);
     else this.poolRight.returnPieceToHome(piece);
+
+    // El drag corre sobre `hit`, así que también debe regresar a home
+    if (piece.hit) piece.hit.setPosition(piece.circle.x, piece.circle.y);
   }
 }

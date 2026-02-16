@@ -22,6 +22,7 @@ export default class PieceFactory {
     for (const type of Object.keys(this.cfg.types)) {
       const t = this.cfg.types[type];
       for (let i = 0; i < t.count; i++) {
+        const isBW = type === "bw";
         pieces.push(
           new Piece(this.scene, {
             id: `${type}_${i + 1}`,
@@ -29,8 +30,15 @@ export default class PieceFactory {
             x,
             y,
             radius,
+
+            // normales
             fillColor: t.fillColor,
             strokeColor: t.strokeColor,
+
+            // bw: usa los colores de los tipos del json (white/black)
+            fillColorA: isBW ? this.cfg.types.white?.fillColor : undefined,
+            fillColorB: isBW ? this.cfg.types.black?.fillColor : undefined,
+
             strokeWidth
           })
         );
