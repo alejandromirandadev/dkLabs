@@ -128,9 +128,14 @@ class PlacementState {
         const hy = piece.circle.getData?.("homeY");
         if (typeof hx === "number" && typeof hy === "number") {
           piece.circle.setPosition(hx, hy);
+          if (piece.hit) piece.hit.setPosition(hx, hy);
         }
         piece.circle.setData?.("placed", false);
         piece.circle.setData?.("nodeKey", null);
+        if (piece.hit) {
+          piece.hit.setData?.("placed", false);
+          piece.hit.setData?.("nodeKey", null);
+        }
       }
 
       piece.circle.setDepth?.(10);
@@ -162,14 +167,31 @@ class PlacementState {
       const node = nodeByKey.get(nodeKey);
       if (!node) continue;
 
+      // Visual + hit deben moverse juntos
       piece.circle.setPosition(node.x, node.y);
+      if (piece.hit) piece.hit.setPosition(node.x, node.y);
+
+      // Deben quedar visibles y arrastrables aunque el pool use modo "stamp"
+      piece.circle.setVisible?.(true);
+      if (piece.hit) piece.hit.setVisible?.(true);
+
+      // Reactivar input del draggable (hit) por si el pool lo desactivó
+      const dragObj = piece.hit || piece.circle;
+      dragObj.setInteractive?.();
+      if (boardScene?.input?.setDraggable) boardScene.input.setDraggable(dragObj, true);
+
       piece.circle.setDepth(10);
 
       node.setData("occupied", true);
       node.setData("pieceId", piece.id);
 
+      // Data en ambos (hit es el draggable); circle para compat
       piece.circle.setData("placed", true);
       piece.circle.setData("nodeKey", nodeKey);
+      if (piece.hit) {
+        piece.hit.setData("placed", true);
+        piece.hit.setData("nodeKey", nodeKey);
+      }
     }
   }
 }
