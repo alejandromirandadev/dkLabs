@@ -1023,7 +1023,16 @@ export default class ThreeBoardMode {
     return this.pieces.find((p) => p.mesh === cur) || null;
   }
 
-  _onPointerDown(ev) {
+  async _onPointerDown(ev) {
+    // Bloqueo UX: spectator o no es tu turno => no puedes ni iniciar drag (server igual valida).
+    const { getNetState } = await import("../net/socketClient.js");
+    const ns = getNetState();
+
+    if (!ns.connected) return;
+    if (ns.role !== "white" && ns.role !== "black") return; // spectator o null
+    if (ns.turn !== ns.role) return; // no es tu turno
+
+  // ...
     if (!this.scene || !this.camera || !this.raycaster) return;
     if (!this.piecesGroup) return;
     const ndc = this._eventToNdc(ev);
@@ -1081,7 +1090,8 @@ export default class ThreeBoardMode {
     this._updateSnapPreview(piece);
     ev.preventDefault?.();
   }
-  _onPointerUp(ev) {
+  
+  async _onPointerUp(ev) {
     if (!this.dragState) return;
     const piece = this.pieces.find((p) => p.id === this.dragState.pieceId);
     if (!piece) {
@@ -1092,6 +1102,7 @@ export default class ThreeBoardMode {
 
     const prevHoleId = this.dragState.prevHoleId;
     const cameFromPlaced = !!prevHoleId;
+
     const snapped = this._trySnapPiece(piece);
 
     if (!snapped) {
@@ -1109,11 +1120,88 @@ export default class ThreeBoardMode {
           piece.holeId = null;
         }
       } else {
-        // (No debería ocurrir porque no permitimos agarrar piezas de pool), pero fallback seguro.
+        piece.mesh.position.copy(piece.home);
+        piece.holeId = null;
+      }
+
+      this._hideUnplacedPieces();
+      this.dragState = null;
+      this._hideSnapPreview();
+      ev.preventDefault?.();
+      return;
+    }
+
+    // Si hizo snap: confirmación-only por servidor
+    const snappedHoleId = piece.holeId;
+    const snappedHole = this.holes.find((h) => h.id === snappedHoleId);
+
+    // Fallback seguro: si por alguna razón no existe el hole, revert
+    if (!snappedHole) {
+      if (cameFromPlaced) {
+        const hole = this.holes.find((h) => h.id === prevHoleId);
+        if (hole) {
+          const pegH = this.boardCfg.hexHeight * 0.85;
+          piece.mesh.position.set(hole.position.x, hole.position.y - pegH, hole.position.z);
+          hole.occupied = true;
+          piece.holeId = hole.id;
+          piece.mesh.visible = true;
+        } else {
+          piece.mesh.position.copy(piece.home);
+          piece.holeId = null;
+        }
+      } else {
+        piece.mesh.position.copy(piece.home);
+        piece.holeId = null;
+      }
+
+      this._hideUnplacedPieces();
+      this.dragState = null;
+      this._hideSnapPreview();
+      ev.preventDefault?.();
+      return;
+    }
+
+    // Emit al server (Three solo permite mover piezas ya colocadas => relocate)
+    piece.mesh.userData.pendingMove = true;
+
+    const move = {
+      action: "relocate",
+      pieceId: piece.id,
+      to: {
+        cellId: snappedHole.cellId,
+        holeType: snappedHole.type,       // "center" | "side"
+        sideIndex: snappedHole.sideIndex  // number | null
+      }
+    };
+
+    // lazy import para no tocar imports del archivo
+    const { emitMovePiece } = await import("../net/socketClient.js");
+    const ack = await emitMovePiece(move);
+
+    // Si server rechaza, revert al hueco anterior (o home si no había)
+    if (!ack?.ok) {
+      // liberar el hueco donde hicimos snap local
+      if (snappedHole) snappedHole.occupied = false;
+
+      if (cameFromPlaced) {
+        const hole = this.holes.find((h) => h.id === prevHoleId);
+        if (hole) {
+          const pegH = this.boardCfg.hexHeight * 0.85;
+          piece.mesh.position.set(hole.position.x, hole.position.y - pegH, hole.position.z);
+          hole.occupied = true;
+          piece.holeId = hole.id;
+          piece.mesh.visible = true;
+        } else {
+          piece.mesh.position.copy(piece.home);
+          piece.holeId = null;
+        }
+      } else {
         piece.mesh.position.copy(piece.home);
         piece.holeId = null;
       }
     }
+
+    piece.mesh.userData.pendingMove = false;
 
     // Oculta piezas no colocadas (sin pool)
     this._hideUnplacedPieces();

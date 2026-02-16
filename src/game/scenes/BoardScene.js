@@ -1,8 +1,10 @@
 import Phaser from "phaser";
 import Board from "../board/Board";
 import PieceFactory from "../pieces/PieceFactory";
-import { findNearestFreeNode } from "../board/FindSnapNode"; // <-- OJO: ajusta el nombre EXACTO del archivo si el tuyo difiere
+import { findNearestFreeNode } from "../board/FindSnapNode";
 import { placementState } from "../../state/PlacementState";
+import { emitMovePiece } from "../../net/socketClient";
+
 export default class BoardScene extends Phaser.Scene {
 
   constructor() {
@@ -111,7 +113,10 @@ export default class BoardScene extends Phaser.Scene {
     this.allPieces = bw ? [...whites, ...blacks, bw] : [...whites, ...blacks];
 
     // draggable en zona invisible (hit). Si no existe hit, fallback a circle.
+    // bw (neutral) NO se mueve por red (fixture): lo dejamos fijo.
     for (const piece of this.allPieces) {
+      if (piece.type === "bw") continue;
+
       const dragObj = piece.hit || piece.circle;
       dragObj.setData("pieceRef", piece);
       dragObj.setInteractive();
@@ -122,41 +127,33 @@ export default class BoardScene extends Phaser.Scene {
     // this.input.dragDistanceThreshold = 0;
 
     // ---- Handlers ----
-    this.input.on("dragstart", (pointer, gameObject) => {
+    this.input.on("dragstart", async (pointer, gameObject) => {
       const piece = gameObject.getData("pieceRef");
       if (!piece) return;
+
+      // UX block: spectator o no es tu turno => no iniciar drag
+      const { getNetState } = await import("../../net/socketClient");
+      const ns = getNetState();
+
+      if (!ns.connected) return;
+      if (ns.role !== "white" && ns.role !== "black") return;
+      if (ns.turn !== ns.role) return;
+
+      // Evitar doble drag mientras esperamos ack
+      if (gameObject.getData("pendingMove")) return;
 
       // Subir el visual
       piece.circle.setDepth(999);
 
-      // Guardar si ya estaba colocada ANTES de limpiar nodeKey
+      // Guardar estado inicial para revert (confirmación-only)
+      gameObject.setData("dragStartX", gameObject.x);
+      gameObject.setData("dragStartY", gameObject.y);
+
       const wasPlaced = !!gameObject.getData("placed");
       gameObject.setData("wasPlacedAtDragStart", wasPlaced);
 
-      if (wasPlaced) {
-        const prevKey = gameObject.getData("nodeKey");
-
-        // Guardar para revert (caso bw)
-        gameObject.setData("nodeKeyAtDragStart", prevKey);
-
-        // liberar nodo previo
-        if (typeof prevKey === "string") {
-          const prevNode = this.placeNodes.find((n) => {
-            const k = `${n.getData("cellId")}:${n.getData("type")}:${n.getData("sideIndex")}`;
-            return k === prevKey;
-          });
-          if (prevNode) {
-            prevNode.setData("occupied", false);
-            prevNode.setData("pieceId", null);
-          }
-        }
-
-        // queda en el aire (hit + circle)
-        gameObject.setData("placed", false);
-        gameObject.setData("nodeKey", null);
-        piece.circle.setData("placed", false);
-        piece.circle.setData("nodeKey", null);
-      }
+      const startKey = gameObject.getData("nodeKey") ?? null;
+      gameObject.setData("nodeKeyAtDragStart", startKey);
     });
 
     this.input.on("drag", (pointer, gameObject, dragX, dragY) => {
@@ -170,11 +167,16 @@ export default class BoardScene extends Phaser.Scene {
       piece.circle.setPosition(dragX, dragY);
     });
 
-    this.input.on("dragend", (pointer, gameObject) => {
+    this.input.on("dragend", async (pointer, gameObject) => {
       const piece = gameObject.getData("pieceRef");
       if (!piece) return;
 
+      if (gameObject.getData("pendingMove")) return;
+
+      const startX = gameObject.getData("dragStartX");
+      const startY = gameObject.getData("dragStartY");
       const wasPlacedAtStart = !!gameObject.getData("wasPlacedAtDragStart");
+      const startKey = gameObject.getData("nodeKeyAtDragStart"); // puede ser null
 
       const target = findNearestFreeNode(
         this.placeNodes,
@@ -182,80 +184,61 @@ export default class BoardScene extends Phaser.Scene {
         gameObject.y,
         nodeRadius * 2.2
       );
-      // Soltó fuera del tablero
+
+      // Si no hay target: revert visual (no hay cambios de estado)
       if (!target) {
-        // bw: no eliminable, regresa a hueco previo o centro
-        if (piece.type === "bw") {
-          const prevKey = gameObject.getData("nodeKeyAtDragStart");
-
-          const prevNode =
-            typeof prevKey === "string"
-              ? this.placeNodes.find((n) => {
-                  const k = `${n.getData("cellId")}:${n.getData("type")}:${n.getData("sideIndex")}`;
-                  return k === prevKey;
-                })
-              : null;
-
-          const fallbackCenter = this.placeNodes.find((n) => {
-            return (
-              n.getData("cellId") === "0,0" &&
-              n.getData("type") === "center" &&
-              n.getData("sideIndex") === null
-            );
-          });
-
-          const nodeToRestore = prevNode ?? fallbackCenter;
-
-          if (nodeToRestore) {
-            gameObject.setPosition(nodeToRestore.x, nodeToRestore.y);
-            piece.circle.setPosition(nodeToRestore.x, nodeToRestore.y);
-            piece.circle.setDepth(10);
-
-            nodeToRestore.setData("occupied", true);
-            nodeToRestore.setData("pieceId", piece.id);
-
-            const nk = `${nodeToRestore.getData("cellId")}:${nodeToRestore.getData("type")}:${nodeToRestore.getData(
-              "sideIndex"
-            )}`;
-
-            gameObject.setData("placed", true);
-            gameObject.setData("nodeKey", nk);
-            piece.circle.setData("placed", true);
-            piece.circle.setData("nodeKey", nk);
-          } else {
-            piece.circle.setDepth(10);
-          }
-
-          placementState.captureFromPhaser(this);
-                    return;
+        if (typeof startX === "number" && typeof startY === "number") {
+          gameObject.setPosition(startX, startY);
+          piece.circle.setPosition(startX, startY);
         }
-
-        this.#returnToPool(piece);
         piece.circle.setDepth(10);
-
-        placementState.captureFromPhaser(this);
-                return;
+        return;
       }
 
-      // Snap a un hueco válido
+      const targetKey = `${target.getData("cellId")}:${target.getData("type")}:${target.getData("sideIndex")}`;
+
+      // Si soltó en el mismo slot donde ya estaba: no-op -> revert
+      if (wasPlacedAtStart && typeof startKey === "string" && startKey === targetKey) {
+        if (typeof startX === "number" && typeof startY === "number") {
+          gameObject.setPosition(startX, startY);
+          piece.circle.setPosition(startX, startY);
+        }
+        piece.circle.setDepth(10);
+        return;
+      }
+
+      // Visual snap "pending" (pero NO mutamos occupied/nodeKey aún)
       gameObject.setPosition(target.x, target.y);
       piece.circle.setPosition(target.x, target.y);
       piece.circle.setDepth(10);
 
-      target.setData("occupied", true);
-      target.setData("pieceId", piece.id);
+      gameObject.setData("pendingMove", true);
 
-      const nk = `${target.getData("cellId")}:${target.getData("type")}:${target.getData("sideIndex")}`;
+      const move = {
+        action: wasPlacedAtStart ? "relocate" : "place",
+        pieceId: piece.id,
+        to: {
+          cellId: target.getData("cellId"),
+          holeType: target.getData("type"),
+          sideIndex: target.getData("sideIndex") // int o null
+        }
+      };
 
-      gameObject.setData("placed", true);
-      gameObject.setData("nodeKey", nk);
-      piece.circle.setData("placed", true);
-      piece.circle.setData("nodeKey", nk);
+      const ack = await emitMovePiece(move);
 
-      placementState.captureFromPhaser(this);
-          });
+      // Confirmación-only: si server rechaza, revert visual al start
+      if (!ack?.ok) {
+        if (typeof startX === "number" && typeof startY === "number") {
+          gameObject.setPosition(startX, startY);
+          piece.circle.setPosition(startX, startY);
+        }
+      }
 
-    // Restaurar placements previos (persistidos) en 2D
+      gameObject.setData("pendingMove", false);
+    });
+
+    // En multijugador, el estado lo manda el server.
+    // (Si aún no conectó, esto solo deja el tablero limpio; luego Step 9 aplicará snapshot/moves.)
     placementState.applyToPhaser(this);
 
     // Reajustar fondo si cambia el tamaño del canvas
