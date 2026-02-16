@@ -1,7 +1,7 @@
 import './style.css'
 import { createGame } from './game/createGame'
 import ThreeBoardMode from './three/ThreeBoardMode'
-import { placementState } from './state/PlacementState'
+import { placementState, buildInitialSetupPlacements } from './state/PlacementState'
 import { pieceCountState } from './state/PieceCountState'
 
 // Carga placements persistidos (si hay)
@@ -114,22 +114,25 @@ btnEnter3D?.addEventListener('click', enter3D)
 btnBack2D?.addEventListener('click', back2D)
 
 btnClearBoard?.addEventListener('click', () => {
-  // Limpia estado compartido (persistencia)
-  placementState.clear()
+  // Estado inicial oficial (persistencia)
+  const initialPlacements = buildInitialSetupPlacements()
+  placementState.setPlacements(initialPlacements)
 
-  // Reinicia contadores del pool (persistencia)
-  pieceCountState.reset()
+  // Como ya se colocan 21 blancas + 21 negras, el pool queda en 0 y 0
+  pieceCountState.setCounts({ whiteRemaining: 0, blackRemaining: 0 })
 
-  // Si estamos en 3D, limpia también visualmente el 3D
+  // Limpia/aplica visualmente el 2D (aunque esté pausado)
+  const boardScene = getBoardScene()
+  if (boardScene) placementState.applyToPhaser(boardScene)
+
+  // Aplica también en 3D si está montado
   if (threeMode?.isMounted) {
     try {
-      threeMode.clearPlacements()
+      threeMode.setInitialPlacements(initialPlacements)
+      // Nota: método interno; se usa para re-sincronizar la escena sin remount.
+      threeMode._applyPlacementsToScene(initialPlacements)
     } catch {
       // ignore
     }
   }
-
-  // Limpia visualmente el 2D (aunque esté pausado)
-  const boardScene = getBoardScene()
-  if (boardScene) placementState.applyToPhaser(boardScene)
 })

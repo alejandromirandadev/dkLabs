@@ -175,4 +175,73 @@ class PlacementState {
 }
 
 // Singleton
+// Singleton
 export const placementState = new PlacementState();
+
+/**
+ * Genera los placements del estado inicial del juego según DragonDragon notas:
+ * - bw_1 en el centro del Hex central (0,0)
+ * - 6 Hex iniciales (esquinas del radio 3) completamente llenos (7 huecos) alternando color
+ *   en sentido horario, iniciando en (0,3) con blancas.
+ *
+ * Nota: aquí solo se genera la lista lógica de placements.
+ * La aplicación visual (2D/3D) se hace en pasos posteriores.
+ */
+export function buildInitialSetupPlacements() {
+  /**
+   * Orden horario estándar de las 6 esquinas para radio 3, iniciando en (0,3).
+   * (coordenadas axiales q,r => cellId = "q,r")
+   */
+  const cornerCellIds = ["0,3", "3,0", "3,-3", "0,-3", "-3,0", "-3,3"];
+
+  /** @type {ReturnType<import('./PlacementState').placementState.getPlacements>} */
+  const out = [];
+
+  // 1) Corazón de Dragón (bw) en el centro del hex central
+  out.push({
+    pieceId: "bw_1",
+    pieceType: "bw",
+    cellId: "0,0",
+    holeType: "center",
+    sideIndex: null
+  });
+
+  // 2) Esquinas llenas: 3 blancas, 3 negras, alternando horario desde (0,3)
+  let w = 1;
+  let b = 1;
+
+  for (let i = 0; i < cornerCellIds.length; i++) {
+    const cellId = cornerCellIds[i];
+    const isWhite = i % 2 === 0; // inicia blancas
+
+    // Orden determinista de llenado de huecos: centro, luego sides 0..5
+    const holes = [
+      { holeType: "center", sideIndex: null },
+      ...Array.from({ length: 6 }, (_, sideIndex) => ({ holeType: "side", sideIndex }))
+    ];
+
+    for (const h of holes) {
+      if (isWhite) {
+        out.push({
+          pieceId: `white_${w++}`,
+          pieceType: "white",
+          homePoolId: "pool_white",
+          cellId,
+          holeType: h.holeType,
+          sideIndex: h.sideIndex
+        });
+      } else {
+        out.push({
+          pieceId: `black_${b++}`,
+          pieceType: "black",
+          homePoolId: "pool_black",
+          cellId,
+          holeType: h.holeType,
+          sideIndex: h.sideIndex
+        });
+      }
+    }
+  }
+
+  return out;
+}
