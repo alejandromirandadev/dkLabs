@@ -2,13 +2,10 @@ import './style.css'
 import { createGame } from './game/createGame'
 import ThreeBoardMode from './three/ThreeBoardMode'
 import { placementState, buildInitialSetupPlacements } from './state/PlacementState'
-import { pieceCountState } from './state/PieceCountState'
 
 // Carga placements persistidos (si hay)
 placementState.loadFromStorage()
 
-// Carga contadores persistidos (si hay)
-pieceCountState.loadFromStorage()
 
 const game = createGame('app')
 
@@ -92,17 +89,6 @@ function back2D() {
     // (micro-delay para que Phaser ya esté resumiendo)
     setTimeout(() => {
       placementState.applyToPhaser(boardScene)
-
-      // Refresca contadores del pool (por si se colocó/quitó en 3D)
-      const counts = pieceCountState.getCounts()
-      try {
-        boardScene.poolLeft?.setRemaining?.(counts.whiteRemaining)
-        boardScene.poolRight?.setRemaining?.(counts.blackRemaining)
-        boardScene.poolLeft?.refreshActivePiece?.()
-        boardScene.poolRight?.refreshActivePiece?.()
-      } catch {
-        // ignore
-      }
     }, 0)
   }
 
@@ -117,9 +103,6 @@ btnClearBoard?.addEventListener('click', () => {
   // Estado inicial oficial (persistencia)
   const initialPlacements = buildInitialSetupPlacements()
   placementState.setPlacements(initialPlacements)
-
-  // Como ya se colocan 21 blancas + 21 negras, el pool queda en 0 y 0
-  pieceCountState.setCounts({ whiteRemaining: 0, blackRemaining: 0 })
 
   // Limpia/aplica visualmente el 2D (aunque esté pausado)
   const boardScene = getBoardScene()

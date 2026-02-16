@@ -110,32 +110,35 @@ class PlacementState {
     // 0) Regresar TODAS las piezas a su home pool (estado base)
     // Esto hace que: "Limpiar tablero" funcione visualmente y que la sincronía 3D→2D
     // no deje piezas en posiciones viejas.
-    const poolLeft = boardScene.poolLeft;
-    const poolRight = boardScene.poolRight;
-
     for (const piece of boardScene.allPieces) {
       if (!piece?.circle) continue;
 
-      const homePoolId = piece.circle.getData?.("homePoolId");
+      // Base state SIN pool: siempre regresa a homeX/homeY, desmarca placement.
+      const hx = piece.circle.getData?.("homeX");
+      const hy = piece.circle.getData?.("homeY");
+      if (typeof hx === "number" && typeof hy === "number") {
+        piece.circle.setPosition(hx, hy);
+        if (piece.hit) piece.hit.setPosition(hx, hy);
+      }
 
-      if (homePoolId === "pool_white" && poolLeft?.returnPieceToHome) {
-        poolLeft.returnPieceToHome(piece);
-      } else if (homePoolId === "pool_black" && poolRight?.returnPieceToHome) {
-        poolRight.returnPieceToHome(piece);
+      piece.circle.setData?.("placed", false);
+      piece.circle.setData?.("nodeKey", null);
+      if (piece.hit) {
+        piece.hit.setData?.("placed", false);
+        piece.hit.setData?.("nodeKey", null);
+      }
+
+      // Las piezas NO colocadas ya no viven en "pool": se ocultan y no son interactuables.
+      // Excepción: bw siempre debe existir/verse (inicia en centro en la lógica del juego).
+      const isBW = piece.type === "bw" || piece.id === "bw_1";
+      if (!isBW) {
+        piece.circle.setVisible?.(false);
+        if (piece.hit) piece.hit.setVisible?.(false);
+        const dragObj = piece.hit || piece.circle;
+        dragObj.disableInteractive?.();
       } else {
-        // Fallback seguro
-        const hx = piece.circle.getData?.("homeX");
-        const hy = piece.circle.getData?.("homeY");
-        if (typeof hx === "number" && typeof hy === "number") {
-          piece.circle.setPosition(hx, hy);
-          if (piece.hit) piece.hit.setPosition(hx, hy);
-        }
-        piece.circle.setData?.("placed", false);
-        piece.circle.setData?.("nodeKey", null);
-        if (piece.hit) {
-          piece.hit.setData?.("placed", false);
-          piece.hit.setData?.("nodeKey", null);
-        }
+        piece.circle.setVisible?.(true);
+        if (piece.hit) piece.hit.setVisible?.(true);
       }
 
       piece.circle.setDepth?.(10);

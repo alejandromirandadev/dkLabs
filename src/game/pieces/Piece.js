@@ -34,7 +34,7 @@ export default class Piece {
     // GameObject principal
     this.go = null;
 
-    // Back-compat: el resto del código (PiecePool / BoardScene) aún usa `piece.circle`
+    // Back-compat: el resto del código (BoardScene) aún usa `piece.circle`
     this.circle = null;
 
     if (this.type === "bw") {

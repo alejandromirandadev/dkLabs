@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { pieceCountState } from '../state/PieceCountState';
 
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
@@ -38,7 +37,7 @@ export default class ThreeBoardMode {
     this.piecesGroup = null;
 
     /**
-     * Piezas 3D activas (pool + colocadas en huecos).
+     * Piezas 3D activas (solo colocadas en huecos; sin pool).
      *
      * @type {Array<{ id: string, type: 'white'|'black', mesh: THREE.Object3D, home: THREE.Vector3, holeId: (string|null) }>} */
     this.pieces = [];
@@ -84,13 +83,6 @@ export default class ThreeBoardMode {
 
     /** @type {AbortController | null} */
     this._abort = null;
-
-    /**
-     * Contadores 3D (sprites) para remaining por color.
-     * @type {{ white: { sprite: THREE.Sprite, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, texture: THREE.CanvasTexture } | null,
-     *         black: { sprite: THREE.Sprite, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, texture: THREE.CanvasTexture } | null } | null}
-     */
-    this.counter3D = null;
 
     /**
      * Texturas cargadas para la cara superior de los Hex (aleatorias).
@@ -157,8 +149,8 @@ export default class ThreeBoardMode {
       piece.holeId = hole.id;
     }
 
-    // Asegura que el pool respete el contador (solo 1 pieza visible si hay remaining)
-    this._syncPoolsFromCounts();
+    // Sin pool: ocultar piezas no colocadas
+    this._hideUnplacedPieces();
   }
 
   setInitialPlacements(placements) {
@@ -342,17 +334,6 @@ export default class ThreeBoardMode {
     this.snapPreview = null;
 
     // Contadores 3D
-    if (this.counter3D) {
-      for (const k of ['white', 'black']) {
-        const obj = this.counter3D[k];
-        if (!obj) continue;
-        try {
-          obj.texture?.dispose?.();
-          obj.sprite?.material?.dispose?.();
-        } catch (_) {}
-      }
-    }
-    this.counter3D = null;
   }
 
   // =====================
@@ -836,8 +817,6 @@ export default class ThreeBoardMode {
     // Pool “stack” (todas las piezas comparten el mismo home por color)
     const poolZMid = (boardBox.min.z + boardBox.max.z) / 2;
 
-    // Contadores 3D (sprites) cerca de cada pool
-    this._ensure3DCounters({ leftX, rightX, z: poolZMid, boardSize: size });
 
     for (let i = 0; i < counts.white; i++) {
       const { obj } = makePiece('white', whiteMat);
@@ -899,148 +878,8 @@ export default class ThreeBoardMode {
     // Aplica placements existentes (venidos del 2D/localStorage)
     this._applyPlacementsToScene(this.initialPlacements);
 
-    // Pool modo “stamp” (solo 1 visible por color)
-    this._syncPoolsFromCounts();
-  }
-
-  _syncPoolsFromCounts() {
-    // Si aún no se han creado piezas, nada.
-    if (!this.pieces?.length) return;
-
-    const counts = pieceCountState.getCounts();
-    const remainingByType = {
-      white: Math.max(0, Math.floor(Number(counts.whiteRemaining) || 0)),
-      black: Math.max(0, Math.floor(Number(counts.blackRemaining) || 0)),
-    };
-
-    /** @param {'white'|'black'} type */
-    const syncOne = (type) => {
-      const remaining = remainingByType[type];
-      const poolPieces = this.pieces.filter((p) => p.type === type && !p.holeId);
-
-      // Oculta todas las piezas que estén en pool
-      for (const p of poolPieces) {
-        p.mesh.visible = false;
-        // Asegura que sigan “apiladas” en home
-        p.mesh.position.copy(p.home);
-      }
-
-      // Si hay piezas restantes, muestra solo 1 (la primera disponible)
-      if (remaining > 0 && poolPieces.length) {
-        poolPieces[0].mesh.visible = true;
-      }
-    };
-
-    syncOne('white');
-    syncOne('black');
-
-    // Actualiza texto del contador 3D
-    this._update3DCounters(remainingByType);
-  }
-
-  _ensure3DCounters({ leftX, rightX, z, boardSize }) {
-    if (!this.scene) return;
-    if (this.counter3D) {
-      // Asegura posición si el tablero cambió de tamaño
-      try {
-        const y = 55;
-        this.counter3D.white?.sprite?.position?.set(leftX, y, z);
-        this.counter3D.black?.sprite?.position?.set(rightX, y, z);
-      } catch (_) {}
-      return;
-    }
-
-    const make = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = 256;
-      canvas.height = 128;
-      const ctx = canvas.getContext('2d');
-      const texture = new THREE.CanvasTexture(canvas);
-      texture.minFilter = THREE.LinearFilter;
-      texture.magFilter = THREE.LinearFilter;
-      const mat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
-      const sprite = new THREE.Sprite(mat);
-      sprite.renderOrder = 1000;
-      return { sprite, canvas, ctx, texture };
-    };
-
-    this.counter3D = {
-      white: make(),
-      black: make(),
-    };
-
-    // Posición y escala
-    const y = 55;
-    this.counter3D.white.sprite.position.set(leftX, y, z);
-    this.counter3D.black.sprite.position.set(rightX, y, z);
-
-    const sx = Math.max(50, (boardSize?.x || 300) * 0.14);
-    const sy = Math.max(22, (boardSize?.x || 300) * 0.06);
-    this.counter3D.white.sprite.scale.set(sx, sy, 1);
-    this.counter3D.black.sprite.scale.set(sx, sy, 1);
-
-    this.scene.add(this.counter3D.white.sprite);
-    this.scene.add(this.counter3D.black.sprite);
-
-    // Primer render
-    const counts = pieceCountState.getCounts();
-    this._update3DCounters({
-      white: Math.max(0, Math.floor(Number(counts.whiteRemaining) || 0)),
-      black: Math.max(0, Math.floor(Number(counts.blackRemaining) || 0)),
-    });
-  }
-
-  _drawCounter({ ctx, canvas, title, value, isDark }) {
-    if (!ctx) return;
-    const w = canvas.width;
-    const h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
-
-    // Fondo semitransparente
-    ctx.fillStyle = isDark ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.18)';
-    const r = 18;
-    ctx.beginPath();
-    ctx.moveTo(r, 0);
-    ctx.arcTo(w, 0, w, h, r);
-    ctx.arcTo(w, h, 0, h, r);
-    ctx.arcTo(0, h, 0, 0, r);
-    ctx.arcTo(0, 0, w, 0, r);
-    ctx.closePath();
-    ctx.fill();
-
-    // Borde
-    ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.18)';
-    ctx.lineWidth = 3;
-    ctx.stroke();
-
-    // Texto
-    ctx.fillStyle = 'rgba(255,255,255,0.95)';
-    ctx.font = 'bold 28px Arial';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(title, 18, h / 2);
-
-    ctx.font = 'bold 44px Arial';
-    const txt = String(value);
-    const tw = ctx.measureText(txt).width;
-    ctx.fillText(txt, w - 18 - tw, h / 2);
-  }
-
-  _update3DCounters(remainingByType) {
-    if (!this.counter3D) return;
-    try {
-      const w = remainingByType?.white;
-      const b = remainingByType?.black;
-      if (this.counter3D.white) {
-        this._drawCounter({ ctx: this.counter3D.white.ctx, canvas: this.counter3D.white.canvas, title: 'BLANCAS', value: w, isDark: false });
-        this.counter3D.white.texture.needsUpdate = true;
-      }
-      if (this.counter3D.black) {
-        this._drawCounter({ ctx: this.counter3D.black.ctx, canvas: this.counter3D.black.canvas, title: 'NEGRAS', value: b, isDark: true });
-        this.counter3D.black.texture.needsUpdate = true;
-      }
-    } catch (_) {
-      // ignore
-    }
+    // Sin pool: ocultar piezas no colocadas
+    this._hideUnplacedPieces();
   }
 
   _isInsideBoardXZ(x, z) {
@@ -1053,6 +892,36 @@ export default class ThreeBoardMode {
       z >= this.boardBoundsXZ.minZ - pad &&
       z <= this.boardBoundsXZ.maxZ + pad
     );
+  }
+
+  // ============================
+  // Sin pool: visibilidad piezas
+  // ============================
+
+  /**
+   * Oculta (y “resetea” a home) todas las piezas que NO estén colocadas en un Hueco.
+   * - white/black: solo visibles si tienen holeId.
+   * - bw: siempre visible (aunque por algún fallback su holeId sea null).
+   *
+   * Nota: la selección por raycaster ya ignora meshes invisibles.
+   */
+  _hideUnplacedPieces() {
+    if (!this.pieces?.length) return;
+
+    for (const p of this.pieces) {
+      const isBW = p.type === 'bw' || p.id === 'bw_1';
+      const placed = !!p.holeId;
+      const shouldShow = isBW || placed;
+
+      if (!p.mesh) continue;
+
+      p.mesh.visible = shouldShow;
+
+      // Si no está colocada, la “guardamos” en home (fuera del tablero).
+      if (!shouldShow && p.home) {
+        p.mesh.position.copy(p.home);
+      }
+    }
   }
 
   // =====================
@@ -1166,14 +1035,8 @@ export default class ThreeBoardMode {
 
     const piece = this._findPieceByObject(hits[0].object);
     if (!piece) return;
-
-    // No permitir agarrar piezas del pool si ya no hay remaining.
-    // (Solo se permite mover piezas ya colocadas)
-    if (!piece.holeId) {
-      const counts = pieceCountState.getCounts();
-      const remaining = piece.type === 'white' ? Number(counts.whiteRemaining) : Number(counts.blackRemaining);
-      if (!Number.isFinite(remaining) || remaining <= 0) return;
-    }
+    // Sin pool: solo se puede agarrar piezas ya colocadas (o bw).
+    if (!piece.holeId && piece.type !== 'bw') return;
 
     // Si estaba ocupando un hueco, liberarlo (lo re-ocupamos al soltar si no hace snap a otro)
     const prevHoleId = piece.holeId;
@@ -1194,44 +1057,9 @@ export default class ThreeBoardMode {
     this._updateSnapPreview(piece);
     ev.preventDefault?.();
   }
-
   _onDoubleClick(ev) {
-    if (!this.scene || !this.camera || !this.raycaster) return;
-    if (!this.piecesGroup) return;
-    if (this.dragState) return; // evita conflictos durante drag
-
-    const ndc = this._eventToNdc(ev);
-    if (!ndc) return;
-
-    this.raycaster.setFromCamera(ndc, this.camera);
-    const hits = this.raycaster.intersectObjects(this.piecesGroup.children, true);
-    if (!hits.length) return;
-
-    const piece = this._findPieceByObject(hits[0].object);
-    if (!piece) return;
-
-    // Solo aplica a piezas colocadas en el tablero
-    if (!piece.holeId) return;
-
-    // Libera hueco
-    const hole = this.holes.find((h) => h.id === piece.holeId);
-    if (hole) hole.occupied = false;
-
-    piece.holeId = null;
-    piece.mesh.position.copy(piece.home);
-
-    // Devuelve al pool (contador +1) y persiste
-    const counts = pieceCountState.getCounts();
-    if (piece.type === 'white') {
-      pieceCountState.setCounts({ whiteRemaining: Math.min(21, (counts.whiteRemaining ?? 0) + 1) });
-    } else {
-      pieceCountState.setCounts({ blackRemaining: Math.min(21, (counts.blackRemaining ?? 0) + 1) });
-    }
-
-    // Re-sincroniza pool y contadores
-    this._syncPoolsFromCounts();
-
-    ev.preventDefault?.();
+    // Sin pool: desactivado (antes devolvía piezas al pool).
+    return;
   }
 
   _onPointerMove(ev) {
@@ -1253,7 +1081,6 @@ export default class ThreeBoardMode {
     this._updateSnapPreview(piece);
     ev.preventDefault?.();
   }
-
   _onPointerUp(ev) {
     if (!this.dragState) return;
     const piece = this.pieces.find((p) => p.id === this.dragState.pieceId);
@@ -1267,71 +1094,29 @@ export default class ThreeBoardMode {
     const cameFromPlaced = !!prevHoleId;
     const snapped = this._trySnapPiece(piece);
 
-    if (snapped) {
-      // Si venía del pool (no estaba colocado), consume 1 del contador.
-      if (!cameFromPlaced) {
-        const counts = pieceCountState.getCounts();
-        if (piece.type === 'white') {
-          pieceCountState.setCounts({ whiteRemaining: Math.max(0, (counts.whiteRemaining ?? 0) - 1) });
-        } else {
-          pieceCountState.setCounts({ blackRemaining: Math.max(0, (counts.blackRemaining ?? 0) - 1) });
-        }
-      }
-      this._syncPoolsFromCounts();
-    } else {
-      // No hizo snap.
+    if (!snapped) {
+      // Sin pool: si no hace snap, regresa al último hueco válido (si existe).
       if (cameFromPlaced) {
-        // Si soltó fuera del tablero, “elimina” del tablero y devuelve al pool (contador +1)
-        const inside = this._isInsideBoardXZ(piece.mesh.position.x, piece.mesh.position.z);
-        if (!inside) {
-          // CASO ESPECIAL: la pieza "bw" NO se puede eliminar. Regresa a su hueco previo (o centro).
-          if (piece.type === 'bw') {
-            const restoreId = prevHoleId || '0,0:center:c';
-            const hole = this.holes.find((h) => h.id === restoreId);
-
-            if (hole) {
-              const pegH = this.boardCfg.hexHeight * 0.85; //Aquí checar
-              piece.mesh.position.set(hole.position.x, hole.position.y - pegH, hole.position.z);
-              hole.occupied = true;
-              piece.holeId = hole.id;
-            } else {
-              // Fallback ultra seguro: si no existe el hueco, no la mandes al pool; déjala en home.
-              piece.mesh.position.copy(piece.home);
-            }
-
-            this._syncPoolsFromCounts();
-          } else {
-            // Devuelve a pool
-            piece.mesh.position.copy(piece.home);
-            piece.holeId = null;
-
-            const counts = pieceCountState.getCounts();
-            if (piece.type === 'white') {
-              pieceCountState.setCounts({ whiteRemaining: Math.min(21, (counts.whiteRemaining ?? 0) + 1) });
-            } else {
-              pieceCountState.setCounts({ blackRemaining: Math.min(21, (counts.blackRemaining ?? 0) + 1) });
-            }
-
-            this._syncPoolsFromCounts();
-          }
+        const hole = this.holes.find((h) => h.id === prevHoleId);
+        if (hole) {
+          const pegH = this.boardCfg.hexHeight * 0.85;
+          piece.mesh.position.set(hole.position.x, hole.position.y - pegH, hole.position.z);
+          hole.occupied = true;
+          piece.holeId = hole.id;
+          piece.mesh.visible = true;
         } else {
-          // Si soltó dentro del tablero pero no cerca de hueco, regresa a su hueco anterior
-          const hole = this.holes.find((h) => h.id === prevHoleId);
-          if (hole) {
-            const pegH = this.boardCfg.hexHeight * 0.85; //Aquí checar
-            piece.mesh.position.set(hole.position.x, hole.position.y - pegH, hole.position.z);
-            hole.occupied = true;
-            piece.holeId = hole.id;
-          } else {
-            piece.mesh.position.copy(piece.home);
-          }
+          piece.mesh.position.copy(piece.home);
+          piece.holeId = null;
         }
       } else {
-        // Venía del pool: regresa al pool (no consume)
+        // (No debería ocurrir porque no permitimos agarrar piezas de pool), pero fallback seguro.
         piece.mesh.position.copy(piece.home);
-        this._syncPoolsFromCounts();
+        piece.holeId = null;
       }
     }
+
+    // Oculta piezas no colocadas (sin pool)
+    this._hideUnplacedPieces();
 
     this.dragState = null;
     this._hideSnapPreview();

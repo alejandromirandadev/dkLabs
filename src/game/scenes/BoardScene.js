@@ -1,11 +1,8 @@
 import Phaser from "phaser";
 import Board from "../board/Board";
 import PieceFactory from "../pieces/PieceFactory";
-import PiecePool from "../pieces/PiecePool";
 import { findNearestFreeNode } from "../board/FindSnapNode"; // <-- OJO: ajusta el nombre EXACTO del archivo si el tuyo difiere
 import { placementState } from "../../state/PlacementState";
-import { pieceCountState } from "../../state/PieceCountState";
-
 export default class BoardScene extends Phaser.Scene {
 
   constructor() {
@@ -33,36 +30,29 @@ export default class BoardScene extends Phaser.Scene {
     // 1) Board
     const boardCfg = await fetch("/boards/board_default.json").then((r) => r.json());
     this.board = new Board(this, boardCfg);
-
-    // 2) Pools (izq/der)
-    const margin = 16;
-    const poolW = 200;
-    const poolH = this.scale.height - margin * 2;
-
-    this.poolLeft = new PiecePool(this, {
-      id: "pool_white",
-      type: "white",
-      x: margin,
-      y: margin,
-      width: poolW,
-      height: poolH,
+    // 2) Pools (izq/der) — DESACTIVADOS (ya no se usan reservas laterales)
+    // Creamos "null pools" para no romper referencias existentes en el resto del flujo.
+    const makeNullPool = (id) => ({
+      id,
+      setRemaining: () => {},
+      addPieces: () => {},
+      layoutStack: () => {},
+      refreshActivePiece: () => {},
+      returnPieceToHome: (piece) => {
+        const hx = piece?.circle?.getData?.("homeX");
+        const hy = piece?.circle?.getData?.("homeY");
+        if (typeof hx === "number" && typeof hy === "number") {
+          piece.circle.setPosition(hx, hy);
+          if (piece.hit) piece.hit.setPosition(hx, hy);
+        }
+      },
     });
 
-    this.poolRight = new PiecePool(this, {
-      id: "pool_black",
-      type: "black",
-      x: this.scale.width - poolW - margin,
-      y: margin,
-      width: poolW,
-      height: poolH,
-    });
-
-    // 2.5) Contadores (desde estado persistido)
-    const counts = pieceCountState.getCounts();
-    this.poolLeft.setRemaining(counts.whiteRemaining);
-    this.poolRight.setRemaining(counts.blackRemaining);
+    this.poolLeft = makeNullPool("pool_white");
+    this.poolRight = makeNullPool("pool_black");
 
     // 3) Piezas desde JSON
+
     const piecesCfg = await fetch("/pieces/pieces_default.json").then((r) => r.json());
     const nodeRadius = boardCfg.nodes.radius;
 
@@ -192,15 +182,6 @@ export default class BoardScene extends Phaser.Scene {
         gameObject.y,
         nodeRadius * 2.2
       );
-
-      const syncCountsToPools = () => {
-        const c = pieceCountState.getCounts();
-        this.poolLeft.setRemaining(c.whiteRemaining);
-        this.poolRight.setRemaining(c.blackRemaining);
-        this.poolLeft.refreshActivePiece();
-        this.poolRight.refreshActivePiece();
-      };
-
       // Soltó fuera del tablero
       if (!target) {
         // bw: no eliminable, regresa a hueco previo o centro
@@ -246,24 +227,14 @@ export default class BoardScene extends Phaser.Scene {
           }
 
           placementState.captureFromPhaser(this);
-          syncCountsToPools();
-          return;
-        }
-
-        // white/black: si venía del tablero, devolver 1 al contador
-        if (wasPlacedAtStart) {
-          const c = pieceCountState.getCounts();
-          if (piece.type === "white") c.whiteRemaining = Math.min(21, c.whiteRemaining + 1);
-          else if (piece.type === "black") c.blackRemaining = Math.min(21, c.blackRemaining + 1);
-          pieceCountState.setCounts(c);
+                    return;
         }
 
         this.#returnToPool(piece);
         piece.circle.setDepth(10);
 
         placementState.captureFromPhaser(this);
-        syncCountsToPools();
-        return;
+                return;
       }
 
       // Snap a un hueco válido
@@ -281,30 +252,11 @@ export default class BoardScene extends Phaser.Scene {
       piece.circle.setData("placed", true);
       piece.circle.setData("nodeKey", nk);
 
-      // si venía del pool => consumir 1 (excepto bw)
-      if (!wasPlacedAtStart) {
-        const c = pieceCountState.getCounts();
-        if (piece.type === "white") c.whiteRemaining = Math.max(0, c.whiteRemaining - 1);
-        else if (piece.type === "black") c.blackRemaining = Math.max(0, c.blackRemaining - 1);
-        pieceCountState.setCounts(c);
-      }
-
       placementState.captureFromPhaser(this);
-      syncCountsToPools();
-    });
+          });
 
     // Restaurar placements previos (persistidos) en 2D
     placementState.applyToPhaser(this);
-
-    // Tras restaurar placements, asegurar que el pool solo muestre 1 pieza (stamp)
-    // y que respete el contador (0 => no arrastrable desde pool)
-    {
-      const c = pieceCountState.getCounts();
-      this.poolLeft.setRemaining(c.whiteRemaining);
-      this.poolRight.setRemaining(c.blackRemaining);
-      this.poolLeft.refreshActivePiece();
-      this.poolRight.refreshActivePiece();
-    }
 
     // Reajustar fondo si cambia el tamaño del canvas
     this.scale.on("resize", (gameSize) => {
