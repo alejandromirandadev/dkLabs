@@ -1307,7 +1307,7 @@ export default class ThreeBoardMode {
     const height = Math.max(220, maxXZ * 1); //Aquí se cambia el tamaño del tablero
 
     // Vista casi cenital: 10° de inclinación desde arriba (vertical)
-    const tiltDeg = 35; //Aquí se cambia la inclinación del tablero
+    const tiltDeg = 40; //Aquí se cambia la inclinación del tablero
     const tiltRad = (tiltDeg * Math.PI) / 180;
     const dist = Math.max(1, height * Math.tan(tiltRad));
 
